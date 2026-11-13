@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Matrix mockup: layout and zoom</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font: 13px/1.35 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #172b4d; background: #f1f2f4; }
+  body { display: flex; flex-direction: column; }
+  .note { background: #fff7d6; border-bottom: 1px solid #e2b203; padding: 6px 14px; font-size: 12px; }
+  .note b { font-weight: 600; }
+  .bar { display: flex; gap: 14px; align-items: center; padding: 8px 14px; background: #fff; border-bottom: 1px solid #dcdfe4; flex-wrap: wrap; }
+  .bar label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #626f86; margin-right: 4px; }
+  .bar select, .bar button { font: inherit; padding: 4px 8px; border: 1px solid #c1c7d0; border-radius: 4px; background: #fff; color: inherit; cursor: pointer; }
+  .bar button:hover { background: #f1f2f4; }
+  .bar .spacer { flex: 1; }
+  .bar .zoomlabel { font-variant-numeric: tabular-nums; color: #626f86; min-width: 150px; text-align: right; }
+  .main { flex: 1; display: flex; min-height: 0; }
+  .tray { width: 190px; background: #fff; border-right: 1px solid #dcdfe4; padding: 10px; overflow: auto; }
+  .tray h4 { margin: 0 0 4px; font-size: 12px; }
+  .tray p { margin: 0 0 8px; font-size: 11px; color: #626f86; }
+  .tray .t { border: 1px solid #dcdfe4; border-left: 4px solid #8590a2; border-radius: 4px; padding: 4px 6px; margin-bottom: 5px; background: #fff; font-size: 12px; }
+  .stage { flex: 1; position: relative; overflow: hidden; cursor: grab; touch-action: none; user-select: none; }
+  .stage.panning { cursor: grabbing; }
+  .matrix { position: absolute; background: #fff; border: 1px solid #b3b9c4; border-radius: 6px; }
+  .cell { position: absolute; border: 1px dashed #c9ced6; }
+  .cell .count { position: absolute; right: 6px; bottom: 4px; font-size: 11px; color: #8590a2; }
+  .cell.hot { background: #e9f2ff; }
+  .xlab, .ylab { position: absolute; font-size: 12px; color: #44546f; text-align: center; white-space: nowrap; pointer-events: none; z-index: 60; }
+  .xlab span, .ylab span { background: rgba(241,242,244,.92); padding: 2px 7px; border-radius: 10px; }
+  .xlab b, .ylab b { color: #172b4d; }
+  .ylab { transform-origin: 0 0; transform: rotate(-90deg) translateX(-100%); }
+  .card { position: absolute; transform: translate(-50%, -50%); cursor: pointer; background: #fff; }
+  .card.dot { width: 13px; height: 13px; border-radius: 50%; background: var(--c); border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(9,30,66,.25); }
+  .card.dot > * { display: none; }
+  .card.chip { width: 128px; padding: 3px 6px; border-radius: 4px; border: 1px solid #c9ced6; border-left: 5px solid var(--c); box-shadow: 0 1px 1px rgba(9,30,66,.15); font-size: 11px; }
+  .card.chip .ttl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card.chip .more { display: none; }
+  .card.full { width: 214px; padding: 8px 9px; border-radius: 7px; border: 1px solid #c9ced6; border-top: 5px solid var(--c); box-shadow: 0 2px 5px rgba(9,30,66,.2); font-size: 12px; }
+  .card.full .ttl { font-weight: 600; margin-bottom: 5px; }
+  .card.full .more { display: block; }
+  .cover { display: none; }
+  .card.full .cover { display: block; height: 96px; border-radius: 4px; margin-bottom: 7px; background: linear-gradient(135deg, #cce0ff 0%, #e9f2ff 45%, #dfd8fd 100%); position: relative; overflow: hidden; }
+  .card.full .cover::before { content: ''; position: absolute; left: 12px; top: 12px; width: 46%; height: 72px; border-radius: 6px; background: rgba(255,255,255,.85); box-shadow: 0 1px 3px rgba(9,30,66,.25); }
+  .card.full .cover::after { content: 'attached image'; position: absolute; right: 10px; bottom: 8px; font-size: 10px; color: #44546f; }
+  .noimg .card.full .cover { display: none; }
+  .back { position: absolute; inset: 0; background: rgba(9,30,66,.55); z-index: 200; display: none; align-items: flex-start; justify-content: center; padding-top: 40px; }
+  .back.on { display: flex; }
+  .back .sheet { width: 620px; max-width: 90%; background: #f1f2f4; border-radius: 10px; padding: 20px 24px; box-shadow: 0 10px 30px rgba(9,30,66,.4); }
+  .back h3 { margin: 0 0 4px; font-size: 18px; }
+  .back .ph { background: #fff; border: 1px dashed #b3b9c4; border-radius: 6px; padding: 14px; margin: 12px 0; color: #626f86; }
+  .back button { font: inherit; padding: 6px 12px; border: 0; border-radius: 4px; background: #0c66e4; color: #fff; cursor: pointer; }
+  .matrix { background: radial-gradient(circle at 100% 0%, rgba(34,160,107,.22) 0%, rgba(34,160,107,.07) 45%, #fff 80%); }
+  .best { position: absolute; right: 8px; top: 8px; background: #22a06b; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 10px; pointer-events: none; }
+  .drawer { position: absolute; right: 0; top: 0; bottom: 0; width: 330px; background: #fff; border-left: 1px solid #b3b9c4; box-shadow: -6px 0 18px rgba(9,30,66,.18); z-index: 150; padding: 14px 16px; overflow: auto; display: none; cursor: default; }
+  .drawer.on { display: block; }
+  .drawer h3 { margin: 0 0 4px; font-size: 15px; }
+  .drawer h4 { margin: 14px 0 4px; font-size: 12px; }
+  .drawer ol { margin: 0; padding-left: 22px; }
+  .drawer li { padding: 2px 0; }
+  .drawer .was { color: #8590a2; font-size: 11px; }
+  .drawer .acts { margin-top: 14px; display: flex; gap: 8px; }
+  .drawer button { font: inherit; padding: 6px 12px; border-radius: 4px; border: 1px solid #c1c7d0; background: #fff; cursor: pointer; }
+  .drawer button.go { background: #0c66e4; border-color: #0c66e4; color: #fff; }
+  .card.dragging { z-index: 50; box-shadow: 0 6px 16px rgba(9,30,66,.35); cursor: grabbing; }
+  .card:hover { z-index: 40; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 3px; color: #fff; font-size: 10px; margin: 0 3px 3px 0; background: var(--c); }
+  .meta { color: #626f86; font-size: 11px; }
+  .fields { margin-top: 5px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .fld { border: 1px solid #dcdfe4; border-radius: 3px; padding: 0 5px; font-size: 10px; color: #44546f; background: #f7f8f9; }
+  .anim .card, .anim .matrix, .anim .cell, .anim .xlab, .anim .ylab { transition: left .4s ease, top .4s ease, width .4s ease, height .4s ease; }
+  .legend { display: flex; gap: 12px; padding: 6px 14px; background: #fff; border-top: 1px solid #dcdfe4; flex-wrap: wrap; font-size: 12px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; background: var(--c); }
+  .toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: #172b4d; color: #fff; padding: 7px 14px; border-radius: 5px; font-size: 12px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99; }
+  .toast.on { opacity: 1; }
+  .tip { position: absolute; background: #172b4d; color: #fff; padding: 3px 7px; border-radius: 3px; font-size: 11px; pointer-events: none; z-index: 98; display: none; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="note"><b>Throwaway mockup, version 3, with invented cards.</b> New: the better end of every axis now points up or right (Cost runs High to Low), so the top-right corner always means "do first", and "Resequence lists" previews the new card order. Still there: click a card to open it, images at close-up. As before: scroll or pinch to zoom, drag the background to pan, drag a card to move it, double-click a section to fill the screen.</div>
+<div class="bar">
+  <span><label>Across</label><select id="xsel"></select></span>
+  <span><label>Up</label><select id="ysel"></select></span>
+  <button id="swap">Swap axes</button>
+  <span><label>Colour by</label><select id="csel"><option value="label">Label</option><option value="impacts">Impacts field</option><option value="list">List</option></select></span>
+  <span><label><input type="checkbox" id="imgs" checked> Show images</label></span>
+  <span><label>Lists</label><select><option>Backlog + New Feature ideas</option></select></span>
+  <button id="reseq">Resequence lists…</button>
+  <span class="spacer"></span>
+  <span class="zoomlabel" id="zl"></span>
+  <button id="fit">Whole matrix</button>
+</div>
+<div class="main">
+  <div class="tray">
+    <h4>Not placed yet (6)</h4>
+    <p>Cards with no level for the two axes shown wait here until you drag them in. (Not draggable in this mockup.)</p>
+    <div class="t">Add dark mode to settings</div>
+    <div class="t">Review vendor data agreement</div>
+    <div class="t">Fix crash on empty search</div>
+    <div class="t">Document release checklist</div>
+    <div class="t">Simplify admin user table</div>
+    <div class="t">Audit analytics events</div>
+  </div>
+  <div class="stage" id="stage">
+    <div class="matrix" id="matrix"></div>
+    <div class="toast" id="toast"></div>
+    <div class="tip" id="tip"></div>
+    <div class="drawer" id="drawer"></div>
+    <div class="back" id="back"><div class="sheet">
+      <div class="meta">The real Trello card opens here</div>
+      <h3 id="backTitle"></h3>
+      <div class="ph">Description, checklists, comments, attachments, activity: everything Trello normally shows on the card, editable as usual.</div>
+      <button id="backBtn">Back to the matrix</button>
+      <span class="meta" style="margin-left:10px">You return to the same zoom and spot.</span>
+    </div></div>
+  </div>
+</div>
+<div class="legend" id="legend"></div>
+
+<script>
+(function () {
+  var PARAMS = {
+    value: { name: 'Value', levels: ['Low', 'Medium', 'High'] },
+    cost: { name: 'Cost', levels: ['High', 'Medium', 'Low'] },
+    ease: { name: 'Ease', levels: ['Hard', 'Easy'] },
+    conv: { name: 'Convenience', levels: ['Low', 'Medium', 'High'] }
+  };
+  var COLORS = {
+    label: { 'UXUI': '#e774bb', 'Process Improvement': '#cf9f02', 'Compliance': '#9f8fef', 'Architecture': '#44546f', 'Bug': '#c9372c', 'Feature request': '#22a06b', 'Product Management': '#f38a3f', 'No label': '#8590a2' },
+    impacts: { 'All mobile': '#e774bb', 'iOS only': '#388bff', 'Android only': '#6a9a23', 'Admin': '#172b4d', 'Website': '#cf9f02', 'Backend': '#f38a3f' },
+    list: { 'Backlog': '#388bff', 'New Feature ideas': '#22a06b' }
+  };
+  var seed = 7;
+  function rnd() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+  function pick(weights) {
+    var keys = Object.keys(weights), total = 0, i;
+    for (i = 0; i < keys.length; i++) total += weights[keys[i]];
+    var r = rnd() * total;
+    for (i = 0; i < keys.length; i++) { r -= weights[keys[i]]; if (r <= 0) return keys[i]; }
+    return keys[0];
+  }
+  var VERBS = ['Redesign', 'Fix', 'Add', 'Audit', 'Simplify', 'Document', 'Automate', 'Speed up', 'Migrate', 'Review', 'Rework'];
+  var THINGS = ['onboarding flow', 'push notification settings', 'admin user table', 'password reset email', 'release checklist', 'privacy consent screen', 'API error handling', 'profile photo upload', 'search filters', 'Android back button', 'payment receipts', 'staging deploy script', 'invite link expiry', 'offline mode', 'crash reporting', 'data export for admins', 'home screen loading', 'team roster view'];
+  var cards = [];
+  for (var i = 0; i < 85; i++) {
+    cards.push({
+      id: i,
+      title: VERBS[i % VERBS.length] + ' ' + THINGS[(i * 7) % THINGS.length],
+      label: pick({ 'UXUI': 43, 'Process Improvement': 21, 'Compliance': 17, 'Architecture': 17, 'Bug': 10, 'Feature request': 8, 'Product Management': 7, 'No label': 8 }),
+      impacts: pick({ 'All mobile': 5, 'iOS only': 2, 'Android only': 2, 'Admin': 2, 'Website': 1, 'Backend': 3 }),
+      list: pick({ 'Backlog': 5, 'New Feature ideas': 1 }),
+      who: pick({ 'MK': 3, '': 4 }),
+      v: { value: rnd(), cost: rnd(), ease: rnd(), conv: rnd() },
+      img: rnd() < 0.35
+    });
+  }
+
+  var stage = document.getElementById('stage'), matrixEl = document.getElementById('matrix');
+  var xsel = document.getElementById('xsel'), ysel = document.getElementById('ysel'), csel = document.getElementById('csel');
+  var toast = document.getElementById('toast'), tip = document.getElementById('tip'), zl = document.getElementById('zl');
+  var PAD = { l: 56, t: 18, r: 22, b: 44 };
+  var k = 1, panX = 0, panY = 0, xp = 'cost', yp = 'value', colorBy = 'label';
+  var cellEls = [], labEls = [], cardEls = [];
+
+  Object.keys(PARAMS).forEach(function (p) {
+    xsel.add(new Option(PARAMS[p].name, p)); ysel.add(new Option(PARAMS[p].name, p));
+  });
+  xsel.value = xp; ysel.value = yp;
+
+  function base() { return { w: stage.clientWidth - PAD.l - PAD.r, h: stage.clientHeight - PAD.t - PAD.b }; }
+  function lvl(p, v) { var n = PARAMS[p].levels.length; return Math.min(n - 1, Math.floor(v * n)); }
+  function mode() { return k < 1.7 ? 'dot' : (k < 3.4 ? 'chip' : 'full'); }
+
+  cards.forEach(function (c) {
+    var el = document.createElement('div');
+    el.className = 'card dot';
+    el.innerHTML = (c.img ? '<div class="cover"></div>' : '') + '<div class="ttl"></div><div class="more"><span class="pill"></span><div class="meta"></div><div class="fields"></div></div>';
+    el.querySelector('.ttl').textContent = c.title;
+    stage.appendChild(el);
+    cardEls.push(el);
+    bindCard(el, c);
+  });
+
+  function buildGrid() {
+    cellEls.forEach(function (e) { e.remove(); }); labEls.forEach(function (e) { e.remove(); });
+    cellEls = []; labEls = [];
+    if (!matrixEl.querySelector('.best')) { var bb = document.createElement('div'); bb.className = 'best'; bb.textContent = 'Do first'; matrixEl.appendChild(bb); }
+    var nx = PARAMS[xp].levels.length, ny = PARAMS[yp].levels.length, i, j, e;
+    for (i = 0; i < nx; i++) for (j = 0; j < ny; j++) {
+      e = document.createElement('div'); e.className = 'cell'; e.dataset.i = i; e.dataset.j = j;
+      e.innerHTML = '<span class="count"></span>';
+      matrixEl.appendChild(e); cellEls.push(e);
+    }
+    for (i = 0; i < nx; i++) { e = document.createElement('div'); e.className = 'xlab'; e.dataset.i = i; e.innerHTML = '<span>' + PARAMS[xp].name + ': <b>' + PARAMS[xp].levels[i] + '</b></span>'; stage.appendChild(e); labEls.push(e); }
+    for (j = 0; j < ny; j++) { e = document.createElement('div'); e.className = 'ylab'; e.dataset.j = j; e.innerHTML = '<span>' + PARAMS[yp].name + ': <b>' + PARAMS[yp].levels[j] + '</b></span>'; stage.appendChild(e); labEls.push(e); }
+  }
+
+  function render() {
+    var b = base(), W = b.w * k, H = b.h * k, ox = PAD.l + panX, oy = PAD.t + panY;
+    var nx = PARAMS[xp].levels.length, ny = PARAMS[yp].levels.length, m = mode();
+    matrixEl.style.left = ox + 'px'; matrixEl.style.top = oy + 'px'; matrixEl.style.width = W + 'px'; matrixEl.style.height = H + 'px';
+    var counts = {};
+    cards.forEach(function (c, idx) {
+      var el = cardEls[idx];
+      el.style.left = (ox + c.v[xp] * W) + 'px';
+      el.style.top = (oy + (1 - c.v[yp]) * H) + 'px';
+      el.className = 'card ' + m + (el.classList.contains('dragging') ? ' dragging' : '');
+      var col = COLORS[colorBy][c[colorBy]];
+      el.style.setProperty('--c', col);
+      var key = lvl(xp, c.v[xp]) + ':' + lvl(yp, c.v[yp]); counts[key] = (counts[key] || 0) + 1;
+      if (m === 'full') {
+        var pill = el.querySelector('.pill'); pill.textContent = c.label; pill.style.setProperty('--c', COLORS.label[c.label]);
+        el.querySelector('.meta').textContent = c.list + (c.who ? ' · ' + c.who : '') + ' · Impacts: ' + c.impacts;
+        el.querySelector('.fields').innerHTML = Object.keys(PARAMS).map(function (p) {
+          return '<span class="fld">' + PARAMS[p].name + ': ' + PARAMS[p].levels[lvl(p, c.v[p])] + '</span>';
+        }).join('');
+      }
+    });
+    cellEls.forEach(function (e) {
+      var i = +e.dataset.i, j = +e.dataset.j;
+      e.style.left = (i / nx * 100) + '%'; e.style.width = (100 / nx) + '%';
+      e.style.top = ((ny - 1 - j) / ny * 100) + '%'; e.style.height = (100 / ny) + '%';
+      e.querySelector('.count').textContent = (counts[i + ':' + j] || 0) + ' cards';
+    });
+    labEls.forEach(function (e) {
+      if (e.className === 'xlab') {
+        var i = +e.dataset.i, x0 = Math.max(ox + i / nx * W, 0), x1 = Math.min(ox + (i + 1) / nx * W, stage.clientWidth);
+        e.style.display = x1 - x0 > 90 ? '' : 'none';
+        e.style.left = ((x0 + x1) / 2 - 60) + 'px'; e.style.width = '120px';
+        e.style.top = Math.min(stage.clientHeight - 24, oy + H + 8) + 'px';
+      } else {
+        var j = +e.dataset.j, y0 = Math.max(oy + (ny - 1 - j) / ny * H, 0), y1 = Math.min(oy + (ny - j) / ny * H, stage.clientHeight);
+        e.style.display = y1 - y0 > 90 ? '' : 'none';
+        e.style.left = Math.max(8, ox - 26) + 'px';
+        e.style.top = ((y0 + y1) / 2 - 50) + 'px'; e.style.width = '100px';
+      }
+    });
+    zl.textContent = (m === 'dot' ? 'Whole matrix: dots' : m === 'chip' ? 'Closer: titles' : 'Close up: full cards') + ' · ' + Math.round(k * 100) + '%';
+  }
+
+  function openReseq() {
+    var lists = {};
+    cards.forEach(function (c, idx) {
+      var dx = 1 - c.v[xp], dy = 1 - c.v[yp];
+      (lists[c.list] = lists[c.list] || []).push({ c: c, was: idx, d: Math.sqrt(dx * dx + dy * dy) });
+    });
+    var html = '<h3>Resequence lists</h3><div class="meta">Each list is reordered on its own, closest to the top-right corner first, using the two axes shown now (' + PARAMS[yp].name + ' and ' + PARAMS[xp].name + '). Cards not placed yet keep their order at the bottom.</div>';
+    Object.keys(lists).forEach(function (name) {
+      var arr = lists[name];
+      arr.forEach(function (a, i) { a.wasPos = i + 1; });
+      arr.sort(function (a, b) { return a.d - b.d; });
+      html += '<h4>' + name + ' (' + arr.length + ' cards)</h4><ol>' + arr.slice(0, 7).map(function (a) {
+        return '<li>' + a.c.title + ' <span class="was">was #' + a.wasPos + '</span></li>';
+      }).join('') + '</ol><div class="meta">…and ' + (arr.length - 7) + ' more</div>';
+    });
+    html += '<div class="acts"><button class="go" id="reseqGo">Reorder in Trello</button><button id="reseqNo">Cancel</button></div>';
+    var dr = document.getElementById('drawer'); dr.innerHTML = html; dr.classList.add('on');
+    document.getElementById('reseqGo').onclick = function () { dr.classList.remove('on'); say('Backlog and New Feature ideas reordered in Trello. Undo is available until the next reorder.'); };
+    document.getElementById('reseqNo').onclick = function () { dr.classList.remove('on'); };
+  }
+  function legend() {
+    var map = COLORS[colorBy];
+    document.getElementById('legend').innerHTML = Object.keys(map).map(function (n) {
+      return '<span><i style="--c:' + map[n] + '"></i>' + n + '</span>';
+    }).join('');
+  }
+
+  function animate(fn) { stage.classList.add('anim'); fn(); render(); setTimeout(function () { stage.classList.remove('anim'); }, 430); }
+  function clampPan() {
+    var b = base(), W = b.w * k, H = b.h * k;
+    panX = Math.min(b.w * .5, Math.max(panX, b.w * .5 - W));
+    panY = Math.min(b.h * .5, Math.max(panY, b.h * .5 - H));
+    if (k <= 1) { panX = 0; panY = 0; }
+  }
+  function say(t) { toast.textContent = t; toast.classList.add('on'); clearTimeout(say.t); say.t = setTimeout(function () { toast.classList.remove('on'); }, 2600); }
+
+  stage.addEventListener('wheel', function (ev) {
+    ev.preventDefault();
+    var r = stage.getBoundingClientRect(), mx = ev.clientX - r.left - PAD.l, my = ev.clientY - r.top - PAD.t;
+    var f = Math.exp(-ev.deltaY * (ev.ctrlKey ? 0.012 : 0.0022)), nk = Math.min(9, Math.max(1, k * f));
+    panX = mx - (mx - panX) * (nk / k); panY = my - (my - panY) * (nk / k); k = nk;
+    clampPan(); render();
+  }, { passive: false });
+
+  var pan = null;
+  stage.addEventListener('pointerdown', function (ev) {
+    if (ev.target.closest('.card')) return;
+    pan = { x: ev.clientX, y: ev.clientY, px: panX, py: panY }; stage.classList.add('panning'); stage.setPointerCapture(ev.pointerId);
+  });
+  stage.addEventListener('pointermove', function (ev) {
+    if (!pan) return; panX = pan.px + ev.clientX - pan.x; panY = pan.py + ev.clientY - pan.y; clampPan(); render();
+  });
+  stage.addEventListener('pointerup', function () { pan = null; stage.classList.remove('panning'); });
+
+  stage.addEventListener('dblclick', function (ev) {
+    var cell = ev.target.closest('.cell'); if (!cell) return;
+    var nx = PARAMS[xp].levels.length, ny = PARAMS[yp].levels.length, i = +cell.dataset.i, j = +cell.dataset.j, b = base();
+    animate(function () {
+      k = Math.min(nx, ny) * 0.94;
+      var W = b.w * k, H = b.h * k;
+      panX = b.w / 2 - (i + .5) / nx * W; panY = b.h / 2 - (ny - 1 - j + .5) / ny * H;
+    });
+  });
+
+  function bindCard(el, c) {
+    var d = null;
+    el.addEventListener('pointerdown', function (ev) {
+      ev.stopPropagation(); el.setPointerCapture(ev.pointerId);
+      d = { x: ev.clientX, y: ev.clientY, vx: c.v[xp], vy: c.v[yp], lx: lvl(xp, c.v[xp]), ly: lvl(yp, c.v[yp]), moved: false };
+      tip.style.display = 'none';
+    });
+    el.addEventListener('pointermove', function (ev) {
+      if (!d) {
+        if (mode() === 'dot') { var r = stage.getBoundingClientRect(); tip.textContent = c.title; tip.style.display = 'block'; tip.style.left = (ev.clientX - r.left + 12) + 'px'; tip.style.top = (ev.clientY - r.top + 12) + 'px'; }
+        return;
+      }
+      var b = base(), dx = ev.clientX - d.x, dy = ev.clientY - d.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
+      if (!d.moved) return;
+      el.classList.add('dragging');
+      c.v[xp] = Math.min(.999, Math.max(0, d.vx + dx / (b.w * k)));
+      c.v[yp] = Math.min(.999, Math.max(0, d.vy - dy / (b.h * k)));
+      render();
+      var hi = lvl(xp, c.v[xp]), hj = lvl(yp, c.v[yp]);
+      cellEls.forEach(function (e) { e.classList.toggle('hot', +e.dataset.i === hi && +e.dataset.j === hj); });
+    });
+    el.addEventListener('pointerleave', function () { tip.style.display = 'none'; });
+    el.addEventListener('pointerup', function () {
+      if (!d) return;
+      el.classList.remove('dragging'); cellEls.forEach(function (e) { e.classList.remove('hot'); });
+      var changes = [], nlx = lvl(xp, c.v[xp]), nly = lvl(yp, c.v[yp]);
+      if (nlx !== d.lx) changes.push(PARAMS[xp].name + ': ' + PARAMS[xp].levels[d.lx] + ' → ' + PARAMS[xp].levels[nlx]);
+      if (nly !== d.ly) changes.push(PARAMS[yp].name + ': ' + PARAMS[yp].levels[d.ly] + ' → ' + PARAMS[yp].levels[nly]);
+      if (changes.length) say('"' + c.title + '" updated on the card. ' + changes.join(', '));
+      else if (d.moved) say('Moved within the same section. Nothing changes on the card.');
+      else { document.getElementById('backTitle').textContent = c.title; document.getElementById('back').classList.add('on'); }
+      d = null; render();
+    });
+  }
+
+  function setAxes(nxp, nyp) {
+    if (nxp === nyp) { say('Pick two different parameters.'); xsel.value = xp; ysel.value = yp; return; }
+    xp = nxp; yp = nyp; xsel.value = xp; ysel.value = yp;
+    stage.classList.add('anim'); buildGrid(); k = 1; panX = 0; panY = 0; render();
+    setTimeout(function () { stage.classList.remove('anim'); }, 430);
+  }
+  xsel.onchange = function () { setAxes(xsel.value, yp); };
+  ysel.onchange = function () { setAxes(xp, ysel.value); };
+  document.getElementById('swap').onclick = function () { setAxes(yp, xp); };
+  csel.onchange = function () { colorBy = csel.value; legend(); render(); };
+  document.getElementById('fit').onclick = function () { animate(function () { k = 1; panX = 0; panY = 0; }); };
+  window.addEventListener('resize', function () { clampPan(); render(); });
+  window.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') document.getElementById('fit').click(); });
+
+  document.getElementById('reseq').onclick = openReseq;
+  document.getElementById('drawer').addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+  document.getElementById('drawer').addEventListener('wheel', function (ev) { ev.stopPropagation(); });
+  document.getElementById('imgs').onchange = function () { stage.classList.toggle('noimg', !this.checked); };
+  document.getElementById('backBtn').onclick = function () { document.getElementById('back').classList.remove('on'); };
+  document.getElementById('back').addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+  buildGrid(); legend(); render();
+})();
+</script>
+</body>
+</html>
