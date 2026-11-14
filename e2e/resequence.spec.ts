@@ -129,19 +129,65 @@ test('Cancel after a failure leaves the drawer closed and the matrix showing wha
   await expect(drawer(page).getByRole('button', { name: 'Undo last reorder' })).toBeVisible();      // the cards that moved can be put back
 });
 
-test('the order is worked out again when Reorder is pressed, so a card added meanwhile is included', async ({ page }) => {
+const CHANGED_TEXT = 'The board changed. Check the new order, then press Reorder in Trello again.';
+
+/** The other person adds a card to Backlog; it has no field values, so it is not placed. */
+const addCard = (page: Page, id: string) => page.evaluate(cardId => (window as unknown as { __store: FakeStore }).__store.remote(snap => {
+  const top = Math.max(...snap.cards.map(c => c.pos));
+  snap.cards.push({ id: cardId, name: 'Added meanwhile', idList: 'l-backlog', pos: top + 16384, labelIds: [], memberIds: [], hasCover: false, fieldOptions: {} });
+}), id);
+const reorderCalls = (page: Page) => store(page, s => s.calls.filter(c => c.method === 'reorderLists').length);
+
+test('an unchanged board is sent on the first press, with no message', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('resequence').click();
+  await expect(drawer(page)).toBeVisible();
+  await reorderButton(page).click(); await expect(page.getByTestId('toast')).toContainText('reordered.');
+  expect(await reorderCalls(page)).toBe(1);
+  await expect(page.getByTestId('reseq-changed')).toBeHidden();
+});
+
+test('when the board changed since the preview, the first press sends nothing and shows the new order; the second press sends it', async ({ page }) => {
   await page.goto('dev.html'); await page.getByTestId('resequence').click();
   await expect(drawer(page)).toBeVisible();
   await expect(drawer(page).getByText('The lists are already in this order.')).toBeHidden();
-  await store(page, s => s.remote(snap => {
-    const top = Math.max(...snap.cards.map(c => c.pos));
-    snap.cards.push({ id: 'c-new', name: 'Added meanwhile', idList: 'l-backlog', pos: top + 16384, labelIds: [], memberIds: [], hasCover: false, fieldOptions: {} });
-  }));
+  const heading = drawer(page).locator('h4').first();
+  const countBefore = Number((await heading.textContent())!.match(/\((\d+) cards\)/)![1]);
+  const changed = page.getByTestId('reseq-changed');
+  await expect(changed).toBeHidden();
+  await addCard(page, 'c-new');
+  const orderMeanwhile = await listOrder(page, 'l-backlog');
+  await reorderButton(page).click();
+  await expect(changed).toHaveText(CHANGED_TEXT);
+  await expect(heading).toHaveText(`Backlog (${countBefore + 1} cards)`);             // the preview now includes the added card
+  expect(await reorderCalls(page)).toBe(0);
+  expect(await listOrder(page, 'l-backlog')).toEqual(orderMeanwhile);                  // nothing was written
+  await expect(drawer(page)).toBeVisible();
+  await expect(reorderButton(page)).toBeEnabled();
+  await expect(page.getByTestId('toast')).toBeHidden();
+
   await reorderButton(page).click(); await expect(page.getByTestId('toast')).toContainText('reordered.');
   const after = await listOrder(page, 'l-backlog');
   expect(after).toContain('c-new');
   expect(after.at(-1)).toBe('c-new');                                                    // not placed: at the bottom, after the placed cards
   expect(after[0]).toBe('c1');
+  expect(await reorderCalls(page)).toBe(1);
+});
+
+test('the check is repeated on every press: a second change before the second press asks again', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('resequence').click();
+  const changed = page.getByTestId('reseq-changed');
+  await addCard(page, 'c-new-1');
+  await reorderButton(page).click(); await expect(changed).toHaveText(CHANGED_TEXT);
+  await addCard(page, 'c-new-2');
+  await reorderButton(page).click();
+  await expect(drawer(page).locator('h4').first()).toHaveText(/\(\d+ cards\)/);
+  await expect(changed).toBeVisible();
+  expect(await reorderCalls(page)).toBe(0);                                            // still nothing written
+  await expect(page.getByTestId('toast')).toBeHidden();
+  await reorderButton(page).click(); await expect(page.getByTestId('toast')).toContainText('reordered.');
+  expect(await reorderCalls(page)).toBe(1);
+  const after = await listOrder(page, 'l-backlog');
+  expect(after.slice(-2)).toEqual(['c-new-1', 'c-new-2']);
 });
 
 test('a chosen list whose order would not change is shown but not sent', async ({ page }) => {

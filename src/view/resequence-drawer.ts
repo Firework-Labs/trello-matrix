@@ -8,8 +8,10 @@ import { showToast } from './toast';
 /**
  * The resequence drawer: a preview of each chosen list's new card order (nearest the top-right corner first),
  * then "Reorder in Trello", which writes it, and "Undo last reorder". Nothing is written until Reorder is pressed.
- * The order is worked out again from a fresh read of the board at that moment, with the axes and lists the preview
- * was opened with, and only lists whose order changes are sent. Closed only by Cancel (never by a key).
+ * When Reorder is pressed the order is worked out again from a fresh read of the board, with the axes and lists the
+ * preview was opened with. It is sent, and only for the lists whose order changes, only if it is exactly the order the
+ * person was shown. If the board changed meanwhile nothing is sent: the preview becomes the new order, a line says so,
+ * and the next press checks again. Closed only by Cancel (never by a key).
  */
 export interface ResequenceRequest {
   snapshot: BoardSnapshot;
@@ -37,8 +39,12 @@ export interface ResequenceDrawer {
 const PREVIEW_CARDS = 7;
 const TEXT_SAME = 'The lists are already in this order.';
 const TEXT_UNDONE = 'Last reorder undone.';
+const TEXT_CHANGED = 'The board changed. Check the new order, then press Reorder in Trello again.';
 
 interface ListPlan { list: List; titles: Map<string, string>; ranked: RankedCard[]; changed: boolean }
+
+/** What the person is shown for a plan: the lists, and for each the cards in their new order with the place each was in. */
+const signatureOf = (plans: ListPlan[]): string => JSON.stringify(plans.map(p => [p.list.id, p.ranked.map(r => [r.cardId, r.oldIndex])]));
 
 /** What a failed or finished step left on screen: `retry` is set when the same step can be sent again. */
 interface Failure { text: string; retry: (() => void) | null }
@@ -92,6 +98,7 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
   let running: 'reorder' | 'undo' | null = null;
   let progress: Progress | null = null;
   let failure: Failure | null = null;
+  let boardChanged = false;                        // the last press found a different order from the one shown, and sent nothing
   let stoppedPartway = false;                      // a reorder or undo began writing and stopped, so the board may differ from what is shown
 
   const backdrop = el('div', 'mm-drawer-backdrop');
@@ -109,6 +116,9 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
   const same = el('p', 'mm-rs-same', TEXT_SAME);
   same.dataset.testid = 'reseq-same';
   const listsBox = el('div', 'mm-rs-lists');
+  const changedLine = el('p', 'mm-rs-changed', TEXT_CHANGED);
+  changedLine.dataset.testid = 'reseq-changed';
+  changedLine.setAttribute('role', 'status');
   const progressLine = el('p', 'mm-rs-progress');
   progressLine.dataset.testid = 'reseq-progress';
   progressLine.setAttribute('role', 'status');
@@ -123,7 +133,7 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
   actions.append(go, retry, cancel);
   const undoRow = el('div', 'mm-rs-actions');
   undoRow.append(undo);
-  drawer.append(el('h3', undefined, 'Resequence lists'), intro, same, listsBox, progressLine, errorLine, actions, undoRow);
+  drawer.append(el('h3', undefined, 'Resequence lists'), intro, same, changedLine, listsBox, progressLine, errorLine, actions, undoRow);
 
   // ---- what is shown: the preview, then the buttons and lines that follow the state ----
 
@@ -150,6 +160,7 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
     const retrying = failure?.retry != null;
     const anyChange = plans.some(p => p.changed);
     same.hidden = anyChange || plans.length === 0;
+    changedLine.hidden = !boardChanged;
     go.hidden = retrying;
     go.disabled = running !== null || !anyChange;
     retry.hidden = !retrying;
@@ -211,17 +222,20 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
     await finish(message);
   }
 
-  /** "Reorder in Trello": works the order out again from a fresh read, then sends the lists that change. */
+  /** "Reorder in Trello": works the order out again from a fresh read. Sends the lists that change only if it is the order that was shown. */
   async function apply(): Promise<void> {
     if (running || !request) return;
     running = 'reorder';
     progress = null;
     failure = null;
+    boardChanged = false;
     sync();
     const { across, up, listIds } = request;
     let fresh: ReturnType<typeof planFor>;
+    let freshSnapshot: BoardSnapshot;
     try {
-      fresh = planFor(await store.load(), across, up, listIds);
+      freshSnapshot = await store.load();
+      fresh = planFor(freshSnapshot, across, up, listIds);
     } catch (error) {
       if (signal.aborted) return;
       running = null;
@@ -236,10 +250,18 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
       sync();
       return;
     }
+    const shown = signatureOf(plans);
     plans = fresh.plans;
     showPreview(fresh.across, fresh.up);
     const changed = plans.filter(p => p.changed);
-    if (changed.length === 0) {                       // the board changed since the preview: there is nothing left to do
+    if (signatureOf(plans) !== shown) {               // not the order the person confirmed: show the new one and wait for another press
+      request = { ...request, snapshot: freshSnapshot };
+      boardChanged = true;
+      running = null;
+      sync();
+      return;
+    }
+    if (changed.length === 0) {                       // nothing left to do
       running = null;
       sync();
       return;
@@ -289,6 +311,7 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
     progress = null;
     failure = null;
     stoppedPartway = false;
+    boardChanged = false;
     const planned = planFor(next.snapshot, next.across, next.up, next.listIds);
     plans = planned?.plans ?? [];
     if (planned) showPreview(planned.across, planned.up);
