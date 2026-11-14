@@ -165,11 +165,8 @@ export function createFakeStore(o: { snapshot?: BoardSnapshot; connected?: boole
       enter('removeParameter', [id]);
       parameterNamed(id);
       board.parameters = board.parameters.filter(p => p.id !== id);
-      // The field and the cards' values stay; only the stored positions for it are forgotten.
-      for (const [cardId, placement] of Object.entries(board.placements)) {
-        delete placement.positions[id];
-        if (Object.keys(placement.positions).length === 0) delete board.placements[cardId];
-      }
+      // Removes it from the matrix only: the field, the cards' values and their stored
+      // positions all stay, so linking the field again restores every card's exact spot.
     },
 
     async reorderLists(orders: ListOrder[], onProgress) {

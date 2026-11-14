@@ -231,12 +231,19 @@ describe('fake store', () => {
     const st = createFakeStore();
     const ease = param(await st.load(), 'f-ease');
     await st.setLevel('c3', ease, 1);
+    await st.savePositions('c3', { 'f-ease': 0.8 });
     await st.removeParameter('f-ease');
     const s = await st.load();
     expect(s.parameters.map(p => p.id)).toEqual(['f-value', 'f-cost']);
     expect(s.dropdownFields.some(f => f.id === 'f-ease')).toBe(true);
     expect(byId(s, 'c3').fieldOptions['f-ease']).toBe('e1');
+    expect(s.placements.c3!.positions['f-ease']).toBe(0.8);          // exact position is kept
     await expect(st.removeParameter('f-ease')).rejects.toMatchObject({ kind: 'invalid' });
+    await st.linkParameter('f-ease', 'last');
+    const relinked = await st.load();
+    expect(relinked.parameters.map(p => p.id)).toEqual(['f-value', 'f-cost', 'f-ease']);
+    expect(relinked.placements.c3!.positions['f-ease']).toBe(0.8);
+    expect(byId(relinked, 'c3').fieldOptions['f-ease']).toBe('e1');
   });
 
   test('linkParameter turns an existing dropdown field into a parameter', async () => {
