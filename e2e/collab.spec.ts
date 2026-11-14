@@ -466,3 +466,66 @@ test('a drop whose write fails after a snapshot arrived shows what the store hol
   expect(await fieldsOf(page, 'c1')).toMatchObject({ 'f-cost': 'k0', 'f-value': 'v0' });   // the levels that did go in are shown
   await expect(card(page, 'c1')).toHaveAttribute('data-zone', 'matrix');
 });
+
+// ---- while a dialog or the drawer is open ----
+
+for (const [name, button, closer] of [
+  ['parameter dialog', 'params', 'Done'], ['resequence drawer', 'resequence', 'Cancel'],
+] as const) {
+  test(`the matrix behind the open ${name} follows the other person's changes`, async ({ page }) => {
+    await page.goto('dev.html');
+    const before = (await card(page, 'c4').boundingBox())!;
+    const section = await sectionCount(page, '0-0');
+    await page.getByTestId(button).click();
+    await expect(page.getByRole('button', { name: closer })).toBeVisible();          // the modal is open ...
+    await store(page, s => s.remote(b => {
+      b.placements.c4!.positions['f-cost'] = 0.95;
+      b.cards.find(c => c.id === 'c4')!.fieldOptions['f-cost'] = 'k2';
+      b.cards.find(c => c.id === 'c1')!.name = 'Renamed behind the modal';
+    }));
+    await expect.poll(async () => (await card(page, 'c4').boundingBox())!.x).toBeGreaterThan(before.x + 300);   // ... and the card moved behind it
+    await expect(card(page, 'c1')).toHaveAttribute('aria-label', 'Renamed behind the modal');
+    expect(await sectionCount(page, '0-0')).toBe(section - 1);
+    await expect(page.getByRole('button', { name: closer })).toBeVisible();          // still open
+    expect(await storeCalls(page)).toEqual([]);
+  });
+}
+
+// ---- a drop that the other person's change has made wrong ----
+
+test('axes changed by the other person mid-drag: the drop is discarded with a message and nothing is written', async ({ page }) => {
+  await page.goto('dev.html');
+  const from = await centreOf(page, '[data-card-id="c1"]');
+  await startDrag(page, 'c1', { x: from.x - 150, y: from.y + 60 });
+  await expect(card(page, 'c1')).toHaveAttribute('data-dragging', '');
+  await store(page, s => s.remote(b => { b.parameters = b.parameters.filter(p => p.id !== 'f-cost'); }));   // the Across parameter
+  await expect(page.getByTestId('across')).toHaveValue('f-ease');
+  await page.mouse.up();
+  await expect(page.getByTestId('toast')).toHaveText('The axes changed while you were dragging. Nothing was moved.');
+  await expect(card(page, 'c1')).not.toHaveAttribute('data-dragging', '');
+  await nextFrames(page);
+  expect(await store(page, s => s.calls.filter(c => c.method === 'savePositions' || c.method === 'setLevel').length)).toBe(0);
+  // c1 has a Value but no Ease: with the new axes it waits in the left strip, where the latest snapshot puts it.
+  await expect(card(page, 'c1')).toHaveAttribute('data-zone', 'leftStrip');
+  const area = (await page.locator('.mm-area').boundingBox())!;
+  const at = await centreOf(page, '[data-card-id="c1"]');
+  expect(at.y).toBeCloseTo(area.y + (1 - 0.9) * area.height, 0);                    // its Value spot, not where it was dropped
+  expect(at.x).toBeLessThan(area.x);
+});
+
+test('a tray card that the other person places while it is in the hand can still be dropped back on the tray', async ({ page }) => {
+  await page.goto('dev.html');
+  await startDrag(page, 'c3', await centreOf(page, '[data-testid="tray"]'));
+  await expect(card(page, 'c3')).toHaveAttribute('data-dragging', '');
+  await store(page, s => s.remote(b => {
+    const c3 = b.cards.find(c => c.id === 'c3')!;
+    c3.fieldOptions['f-cost'] = 'k1'; c3.fieldOptions['f-value'] = 'v1';
+    b.placements.c3 = { positions: { 'f-cost': 0.5, 'f-value': 0.5 } };
+  }));
+  await page.mouse.up();
+  await expect.poll(async () => await fieldsOf(page, 'c3')).not.toHaveProperty('f-cost');
+  expect(await fieldsOf(page, 'c3')).not.toHaveProperty('f-value');
+  expect(await positionsOf(page, 'c3')).toBeUndefined();
+  await expect(card(page, 'c3')).toHaveAttribute('data-zone', 'tray');
+  await expect(page.getByTestId('toast')).toBeVisible();                             // "Cost: Medium → not set, ..."
+});

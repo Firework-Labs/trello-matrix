@@ -81,6 +81,8 @@ interface Press {
   anchor: { x: number | null; y: number | null };
   /** Set once the pointer has moved CLICK_SLOP: the card's page rectangle at that moment. */
   lifted: DOMRect | null;
+  /** The two axis parameters when the pointer went down: the anchor above is measured on these. */
+  axes: { across: ParamId; up: ParamId };
   /** The pointer went CLICK_SLOP away without a card being lifted (nobody can drag here): not a click either. */
   strayed: boolean;
 }
@@ -118,7 +120,7 @@ export function attachDrag(ctx: DragContext): void {
     const placed = cardId === undefined ? undefined : surface.placementOf(cardId);
     if (cardId === undefined || !placed) return;
     cancel();                                                 // a stale press whose release never arrived
-    press = { pointerId: ev.pointerId, cardId, startX: ev.clientX, startY: ev.clientY, placed, anchor: anchorOf(placed), lifted: null, strayed: false };
+    press = { pointerId: ev.pointerId, cardId, startX: ev.clientX, startY: ev.clientY, placed, anchor: anchorOf(placed), lifted: null, strayed: false, axes: axesNow() };
     host.setPointerCapture(ev.pointerId);
   }, { signal });
 
@@ -151,6 +153,11 @@ export function attachDrag(ctx: DragContext): void {
   host.addEventListener('pointercancel', ev => {
     if (press && ev.pointerId === press.pointerId) cancel();
   }, { signal });
+
+  function axesNow(): Press['axes'] {
+    const { across, up } = ctx.view();
+    return { across: across.id, up: up.id };
+  }
 
   function anchorOf(placed: PlacedCard): Press['anchor'] {
     const { vp } = ctx.view();
@@ -186,8 +193,14 @@ export function attachDrag(ctx: DragContext): void {
     // The levels it has now, not the ones it had at the press, decide what is written.
     const current = ctx.isPlotted(p.cardId) ? surface.placementOf(p.cardId) : undefined;
     const target = surface.dropTargetAt(clientX, clientY);
-    // Outside every zone, or from the tray back into the tray, or nothing may be written: nothing to write.
-    const plan = current && ctx.canEdit() && target && !(target.zone === 'tray' && p.placed.zone === 'tray')
+    // The other person changed an axis while the card was in the hand: the spot it was dragged to means something else now.
+    if (current && (axesNow().across !== p.axes.across || axesNow().up !== p.axes.up)) {
+      putBack(p.cardId);
+      showToast('The axes changed while you were dragging. Nothing was moved.');
+      return;
+    }
+    // Outside every zone, or from the tray back into the tray (as it is now, not as it was at the press), or nothing may be written: nothing to write.
+    const plan = current && ctx.canEdit() && target && !(target.zone === 'tray' && current.zone === 'tray')
       ? planFor(p, current.card, target, clientX, clientY) : null;
     if (!plan) { putBack(p.cardId); return; }
 
