@@ -12,6 +12,14 @@ interface Opts {
   everythingThrows?: boolean;
   authorized?: boolean;
   coverUrl?: string;
+  /** The Power-Up's id in `t.getContext().plugin`: a string, or null for a context that has none. Default 'plugin1'. */
+  pluginId?: string | null;
+  /** The `idPlugin` REST reports on the card's stored data. Default: the context's plugin id. */
+  restPluginId?: string;
+  /** REST returns the cards without any plugin data. */
+  restOmitsPluginData?: boolean;
+  /** Every `t.set` after this many rejects (counting all sets). */
+  failSetsAfter?: number;
 }
 interface Call { method: string; url: string; headers: Record<string, string>; body: unknown }
 type Fake = CheckDeps & { store: Map<string, unknown>; renderCallbacks: (() => void)[]; calls: Call[]; order: string[] };
@@ -24,11 +32,16 @@ function deps(o: Opts = {}): Fake {
   let authorized = o.authorized ?? true;
   const boom = (): never => { throw new Error('boom'); };
   const cards = o.cards ?? [{ id: 'a' }, { id: 'b' }];
+  let sets = 0;
+  const pluginId = o.pluginId === undefined ? 'plugin1' : o.pluginId;
   const t = {
+    getContext: () => ({ board: 'board1', member: 'm1', ...(pluginId === null ? {} : { plugin: pluginId }) }),
     get: async (scope: string, vis: string, key: string) => { order.push('get'); return o.everythingThrows ? boom() : store.get(`${scope}|${vis}|${key}`); },
     set: async (scope: string, vis: string, key: string, value: unknown) => {
       order.push('set');
+      sets++;
       if (o.everythingThrows) boom();
+      if (o.failSetsAfter !== undefined && sets > o.failSetsAfter) throw new Error('storage is busy');
       if (o.setRejects) throw new Error(o.setRejects);
       store.set(`${scope}|${vis}|${key}`, value);
     },
@@ -66,6 +79,18 @@ function deps(o: Opts = {}): Fake {
       json = { id: 'o1', value: { text: optionText } };
     } else if (method === 'GET' && path === '/1/customFields/f1/options/o1') {
       json = { id: 'o1', value: { text: optionText } };
+    } else if (path === '/1/boards/board1') {
+      // Like Trello: each card lists its stored Power-Up data as one entry per Power-Up, the value a JSON string.
+      const pluginData = (cardId: string) => {
+        const mine: Record<string, unknown> = {};
+        for (const [k, v] of store) {
+          const [scope, vis, key] = k.split('|');
+          if (scope === cardId && vis === 'shared') mine[key!] = v;
+        }
+        if (o.restOmitsPluginData || Object.keys(mine).length === 0) return [];
+        return [{ idPlugin: o.restPluginId ?? pluginId ?? 'plugin1', scope: 'card', idModel: cardId, value: JSON.stringify(mine), access: 'shared' }];
+      };
+      json = { id: 'board1', cards: ['a', 'b'].map(id => ({ id, name: id.toUpperCase(), pluginData: pluginData(id) })) };
     } else if (path === '/1/boards/board1/cards') {
       json = [{ id: 'a', cover: {} }, { id: 'b', cover: { scaled: [{ url: 'https://img.example/small.png' }, { url: o.coverUrl ?? 'https://img.example/big.png' }] } }];
     } else if (path.startsWith('/1/cards/')) {
@@ -88,8 +113,8 @@ const byId = (id: string) => {
   return c;
 };
 
-test('there are seven checks, P1 to P7, in order', () => {
-  expect(checks.map(c => c.id)).toEqual(['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7']);
+test('there are eight checks, P1 to P8, in order', () => {
+  expect(checks.map(c => c.id)).toEqual(['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8']);
 });
 
 test('P1 passes when a value set on another card id reads back', async () => {
@@ -278,12 +303,89 @@ test('P7 still deletes the field when the rename fails', async () => {
   expect(d.calls.some(c => c.method === 'DELETE' && c.url.includes('/1/customFields/f1'))).toBe(true);
 });
 
+describe('P8', () => {
+  const KEY = 'a|shared|mxproof8';
+  const burstSets = (d: Fake) => d.order.filter(o => o === 'set').length;
+
+  test('P8 passes when REST returns the value under this Power-Up\'s id, and reports the burst', async () => {
+    const d = deps();
+    const r = await byId('P8').run(d);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toContain('plugin id in the context: yes');
+    expect(r.detail).toContain('value in the REST card data: found');
+    expect(r.detail).toContain('idPlugin matches the context: yes');
+    expect(r.detail).toMatch(/30 saves in \d+ ms, failures: 0/);
+    expect(burstSets(d)).toBe(31);                                  // the stamp, then the burst
+    const read = d.calls.find(c => c.method === 'GET' && c.url.includes('/1/boards/board1?'));
+    expect(read?.url).toBe('https://api.trello.com/1/boards/board1?cards=open&card_fields=name&card_pluginData=true');
+    expect(read?.headers.Authorization).toBe(`OAuth oauth_consumer_key="KEY", oauth_token="${TOKEN}"`);
+    expect(d.store.has(KEY)).toBe(false);
+  });
+  test('P8 fails when the context has no plugin id, and still removes its key', async () => {
+    for (const pluginId of [null, '']) {
+      const d = deps({ pluginId });
+      const r = await byId('P8').run(d);
+      expect(r.status).toBe('fail');
+      expect(r.detail).toContain('plugin id in the context: no');
+      expect(d.store.has(KEY)).toBe(false);
+    }
+  });
+  test('P8 fails when REST does not return the stored value, and still removes its key', async () => {
+    const d = deps({ restOmitsPluginData: true });
+    const r = await byId('P8').run(d);
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('value in the REST card data: not found');
+    expect(r.detail).toMatch(/30 saves in \d+ ms/);                 // the burst is measured all the same
+    expect(d.store.has(KEY)).toBe(false);
+  });
+  test('P8 fails when the entry is there under a different idPlugin', async () => {
+    const d = deps({ restPluginId: 'someone-else' });
+    const r = await byId('P8').run(d);
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('value in the REST card data: found');
+    expect(r.detail).toContain('idPlugin matches the context: no');
+    expect(d.store.has(KEY)).toBe(false);
+  });
+  test('P8 counts failed saves in the burst, reports the first error and still passes on the REST facts', async () => {
+    const d = deps({ failSetsAfter: 21 });                           // the stamp and 20 saves work, the last 10 fail
+    const r = await byId('P8').run(d);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toMatch(/30 saves in \d+ ms, failures: 10 \(first error: storage is busy\)/);
+    expect(d.store.has(KEY)).toBe(false);
+  });
+  test('P8 reports a REST failure, still runs the burst and removes its key', async () => {
+    const d = deps({ fetchStatus: 500 });
+    const r = await byId('P8').run(d);
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('HTTP 500');
+    expect(r.detail).toMatch(/30 saves in \d+ ms, failures: 0/);
+    expect(d.store.has(KEY)).toBe(false);
+  });
+  test('P8 removes its key when the first save fails', async () => {
+    const d = deps({ failSetsAfter: 0 });
+    const r = await byId('P8').run(d);
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('storage is busy');
+    expect(d.store.has(KEY)).toBe(false);
+  });
+  test('P8 needs a card, and no result ever holds the token', async () => {
+    const none = await byId('P8').run(deps({ cards: [] }));
+    expect(none).toMatchObject({ status: 'fail', detail: expect.stringContaining('at least one card') });
+    for (const o of [{}, { fetchStatus: 500 }, { restPluginId: 'x' }, { pluginId: null }, { failSetsAfter: 3 }] as Opts[]) {
+      expect(JSON.stringify(await byId('P8').run(deps(o)))).not.toContain(TOKEN);
+    }
+  });
+  test('P8 is a write check: the page keeps it off until the test board is ticked', async () => {
+    expect((await import('../../src/proof/checks')).writeCheckIds).toContain('P8');
+  });
+});
+
 test('every check resolves to a result even when it throws', async () => {
   for (const c of checks) expect((await c.run(deps({ everythingThrows: true }))).status).toBe('fail');
 });
 test('no result ever contains the token', async () => {
   const d = deps({ imgLoads: false });
-  for (const id of ['P1', 'P3', 'P5', 'P6', 'P7']) {
+  for (const id of ['P1', 'P3', 'P5', 'P6', 'P7', 'P8']) {
     expect(JSON.stringify(await byId(id).run(d))).not.toContain(TOKEN);
   }
 });

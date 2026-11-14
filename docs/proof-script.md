@@ -26,7 +26,7 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 ## Round: do these in order
 
 1. **Person A: press Run on P1.** Wait for the result. It should say `pass`.
-   - If it says `fail`, stop. Copy the results (step 12) and send them back
+   - If it says `fail`, stop. Copy the results (step 13) and send them back
      now. Do not carry on.
 2. **Person A: press Run on P3.** A Trello window asks you to allow access.
    Press **Allow**. The row says `manual`, and that is expected.
@@ -43,24 +43,29 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 6. **Person A: press Run on P7.** It makes a temporary field called `mxproof`
    and deletes it again. If the row says the field could not be deleted, delete
    it by hand on the board (Power-Ups, then Custom Fields).
-7. **Person A: press Run on P2** and leave the page open. It waits up to 90
+7. **Person A: press Run on P8.** It writes a short test value on the first
+   card, reads the board back through Trello's web service to see whether that
+   value comes back, then saves to the card 30 times in a row and removes the
+   test value. It takes a few seconds. The row says `pass` or `fail`, and
+   the detail line says how long the 30 saves took.
+8. **Person A: press Run on P2** and leave the page open. It waits up to 90
    seconds. Do not reload it.
-8. **Person B: press Write ping** (next to P2) within those 90 seconds, in
+9. **Person B: press Write ping** (next to P2) within those 90 seconds, in
    B's own window. Wait for A's row to change. It tells you whether the page
    noticed without a reload, and how long it took.
-9. **Person A: press Run on P4.** A card opens on top of the matrix page.
-10. **Person A: close the card** and look at the page again. A moment later, the
+10. **Person A: press Run on P4.** A card opens on top of the matrix page.
+11. **Person A: close the card** and look at the page again. A moment later, the
     P4 row says either `matrix stayed open` or `matrix was closed`. If it says
     nothing, click inside the page once.
     - If the matrix was closed, press **Matrix checks** again in the same
       tab. The page then reports it, and the earlier results are still there.
-11. Look at the **Results** table. Every row should have an answer. Write down
+12. Look at the **Results** table. Every row should have an answer. Write down
     anything odd you saw on screen (windows that popped up, things that
     flickered).
-12. **Press Copy results.** The page copies the answers. A box with the same
+13. **Press Copy results.** The page copies the answers. A box with the same
     text also appears; if the copy does not seem to work, select all the text
     in the box and copy it by hand.
-13. Paste it into a message and send it. Say which browser it came from.
+14. Paste it into a message and send it. Say which browser it came from.
 
 ## The second browser
 

@@ -23,10 +23,11 @@ const BURST = 30;
 const RESTORE_ATTEMPTS = 3;
 const RESTORE_PAUSE_MS = 3000;
 const P4_KEY = 'mxproof.p4';
+const P8_KEY = 'mxproof8';
 const RENAMED = 'Renamed';
 
 /** Ids of the checks that write to the board; the page keeps them off until "This is a test board" is ticked. */
-export const writeCheckIds: readonly string[] = ['P1', 'P6', 'P7'];
+export const writeCheckIds: readonly string[] = ['P1', 'P6', 'P7', 'P8'];
 
 function errorText(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -331,4 +332,63 @@ const p7 = check('P7', 'A dropdown field can be created and an option renamed', 
   return { status: 'pass', detail: `Field created; option renamed to "${RENAMED}" and read back; field deleted` };
 });
 
-export const checks: Check[] = [p1, p2, p3, p4, p5, p6, p7];
+// ---- P8: hidden card data through REST, and a burst of card-storage saves ----
+
+interface RestPluginData { idPlugin?: string; value?: unknown }
+interface RestBoardCards { cards?: { id: string; pluginData?: RestPluginData[] }[] }
+
+// Poll mode builds its snapshot from one board read with the card data included, keeping only this Power-Up's entries
+// (those whose idPlugin is the context's plugin id). A reorder is also about 90 saves in a burst.
+const p8 = check('P8', 'Hidden card data through REST, and a burst of saves', false, async d => {
+  const tok = await token(d);
+  const board = await d.t.board('id');
+  const [first] = await d.t.cards('id');
+  if (!first) return { status: 'fail', detail: 'The board needs at least one card.' };
+  const stamp = `p8-${d.now()}`;
+  const facts: string[] = [];
+  let holds = false;
+  let problem = '';
+  let removed = '';
+  try {
+    await d.t.set(first.id, 'shared', P8_KEY, stamp);
+    try {
+      const plugin = d.t.getContext().plugin;
+      const hasPlugin = typeof plugin === 'string' && plugin !== '';
+      facts.push(`plugin id in the context: ${hasPlugin ? 'yes' : 'no'}`);
+      const path = `/1/boards/${board.id}?cards=open&card_fields=name&card_pluginData=true`;
+      const read = (await (await mustBeOk(await rest(d, tok, 'GET', path), 'Read board')).json()) as RestBoardCards;
+      const entry = read.cards?.find(c => c.id === first.id)?.pluginData
+        ?.find(e => typeof e.value === 'string' && e.value.includes(stamp));
+      facts.push(`value in the REST card data: ${entry ? 'found' : 'not found'}`);
+      const sameId = entry !== undefined && hasPlugin && entry.idPlugin === plugin;
+      if (entry) facts.push(`idPlugin matches the context: ${sameId ? 'yes' : 'no'}`);
+      holds = hasPlugin && sameId;
+    } catch (e) {
+      problem = errorText(e);
+    }
+
+    let failures = 0;
+    let firstError = '';
+    const started = d.now();
+    for (let i = 0; i < BURST; i++) {
+      try {
+        await d.t.set(first.id, 'shared', P8_KEY, `${stamp}-${i}`);
+      } catch (e) {
+        if (failures++ === 0) firstError = errorText(e);
+      }
+    }
+    facts.push(`${BURST} saves in ${d.now() - started} ms, failures: ${failures}${failures ? ` (first error: ${firstError})` : ''}`);
+  } catch (e) {
+    problem = errorText(e);
+  } finally {
+    try {
+      await d.t.remove(first.id, 'shared', P8_KEY);
+    } catch (e) {
+      removed = ` The test value "${P8_KEY}" could not be removed from card ${first.id} (${errorText(e)}); remove it by hand.`;
+    }
+  }
+  const detail = `${[...(problem ? [problem] : []), ...facts].join('; ')}.${removed}`;
+  return { status: holds && !problem && !removed ? 'pass' : 'fail', detail };
+});
+
+export const checks: Check[] = [p1, p2, p3, p4, p5, p6, p7, p8];
