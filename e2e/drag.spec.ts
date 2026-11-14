@@ -328,3 +328,46 @@ test('strip cards are drawn exactly where their position says', async ({ page })
   const bottom = await centreOf(page, '[data-card-id="c2"]');
   expect(Math.abs(bottom.x - (area.x + value * area.width))).toBeLessThan(0.05);
 });
+
+test('zooming with the wheel mid-drag saves where the card is shown', async ({ page }) => {
+  await page.goto('dev.html');
+  const target = await centreOf(page, '[data-section="0-0"]');
+  await startDrag(page, 'c1', target);
+  await page.mouse.wheel(0, -100);                                            // zoom in around the pointer, card in hand
+  await page.mouse.wheel(0, -100);
+  await page.mouse.wheel(0, -100);
+  await nextFrames(page);
+  await page.mouse.move(target.x + 40, target.y - 30, { steps: 3 });
+  await nextFrames(page);
+
+  // Everything is judged at the moment just before the drop.
+  const hot = await page.locator('[data-section].hot').evaluateAll(els => els.map(e => e.getAttribute('data-section')));
+  expect(hot).toHaveLength(1);
+  const [i, j] = hot[0]!.split('-').map(Number) as [number, number];
+  const dropped = await centreOf(page, '[data-card-id="c1"]');
+  expect(Math.abs(dropped.x - (target.x + 40))).toBeLessThan(1);               // the card is under the pointer
+  await page.mouse.up();
+
+  const cost = ['k0', 'k1', 'k2'], value = ['v0', 'v1', 'v2'];
+  await expect.poll(async () => (await fieldsOf(page, 'c1'))!['f-cost']).toBe(cost[i]);
+  expect((await fieldsOf(page, 'c1'))!['f-value']).toBe(value[j]);
+  const costName = ['High', 'Medium', 'Low'], valueName = ['Low', 'Medium', 'High'];
+  const parts = [i !== 2 ? `Cost: Low → ${costName[i]}` : '', j !== 2 ? `Value: High → ${valueName[j]}` : ''].filter(Boolean);
+  if (parts.length) await expect(page.getByTestId('toast')).toHaveText(parts.join(', '));
+  else await expect(page.getByTestId('toast')).toBeHidden();
+
+  await expect(card(page, 'c1')).not.toHaveAttribute('data-dragging', '');
+  await nextFrames(page);
+  const after = await centreOf(page, '[data-card-id="c1"]');
+  expect(Math.abs(after.x - dropped.x)).toBeLessThan(2);                      // the saved position converts back to the drop spot
+  expect(Math.abs(after.y - dropped.y)).toBeLessThan(2);
+  const m = (await page.getByTestId('matrix').boundingBox())!;
+  const p = (await positionsOf(page, 'c1'))!;
+  expect(Math.abs(m.x + p['f-cost']! * m.width - dropped.x)).toBeLessThan(2);
+  expect(Math.abs(m.y + (1 - p['f-value']!) * m.height - dropped.y)).toBeLessThan(2);
+  const section = await page.locator(`[data-section="${i}-${j}"]`).boundingBox();
+  expect(after.x).toBeGreaterThan(section!.x);
+  expect(after.x).toBeLessThan(section!.x + section!.width);
+  expect(after.y).toBeGreaterThan(section!.y);
+  expect(after.y).toBeLessThan(section!.y + section!.height);
+});

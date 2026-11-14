@@ -3,7 +3,7 @@ import type { BoardSnapshot, Parameter, ParamId } from '../model/types';
 import type { BoardStore } from '../store/board-store';
 import type { DropTarget, PlacedCard, Surface } from './surface';
 import { showToast } from './toast';
-import { toModel, type Viewport } from './viewport';
+import { toModel, toScreen, type Viewport } from './viewport';
 
 /** A pointer that stays within this many px of where it went down is a click, not a drag. */
 export const CLICK_SLOP = 4;
@@ -66,6 +66,12 @@ interface Press {
   startX: number;
   startY: number;
   placed: PlacedCard;           // where the card was when the pointer went down
+  /**
+   * Where the card's position on each axis was drawn when the pointer went down, in page pixels
+   * (null on an axis it had no position on). The lifted card follows the pointer in page pixels,
+   * so this plus the pointer's travel is where it is shown, whatever the viewport does meanwhile.
+   */
+  anchor: { x: number | null; y: number | null };
   /** Set once the pointer has moved CLICK_SLOP: the card's page rectangle at that moment. */
   lifted: DOMRect | null;
 }
@@ -103,7 +109,7 @@ export function attachDrag(ctx: DragContext): void {
     const placed = cardId === undefined ? undefined : surface.placementOf(cardId);
     if (cardId === undefined || !placed) return;
     cancel();                                                 // a stale press whose release never arrived
-    press = { pointerId: ev.pointerId, cardId, startX: ev.clientX, startY: ev.clientY, placed, lifted: null };
+    press = { pointerId: ev.pointerId, cardId, startX: ev.clientX, startY: ev.clientY, placed, anchor: anchorOf(placed), lifted: null };
     host.setPointerCapture(ev.pointerId);
   }, { signal });
 
@@ -133,18 +139,31 @@ export function attachDrag(ctx: DragContext): void {
     if (press && ev.pointerId === press.pointerId) cancel();
   }, { signal });
 
+  function anchorOf(placed: PlacedCard): Press['anchor'] {
+    const { vp } = ctx.view();
+    const size = surface.size();
+    const origin = surface.pointInMatrix(0, 0);              // minus the matrix area's page position
+    return {
+      x: placed.x === null ? null : toScreen(placed.x, 0, vp, size).left - origin.x,
+      y: placed.y === null ? null : toScreen(0, placed.y, vp, size).top - origin.y,
+    };
+  }
+
   /**
    * Where the card goes, in model positions: it moves by the pointer's travel on an axis it already had
-   * a position on, and takes the pointer's own position on one it had none on. Null when a position
-   * cannot be computed (a stage with no size), so nothing is ever planned from a non-finite number.
+   * a position on, and takes the pointer's own position on one it had none on. The travel is added to
+   * where the card was drawn (in page pixels) and converted with the viewport as it is now, so if the
+   * view was zoomed during the drag the saved position is still where the card is shown. Null when a
+   * position cannot be computed (a stage with no size), so nothing is ever planned from a non-finite number.
    */
   function planFor(p: Press, target: DropTarget, clientX: number, clientY: number): DropPlan | null {
     const { across, up, vp } = ctx.view();
     const size = surface.size();
     const pointer = surface.pointInMatrix(clientX, clientY);
     const at = toModel(pointer.x, pointer.y, vp, size);
-    const x = p.placed.x === null ? at.x : p.placed.x + (clientX - p.startX) / (size.w * vp.zoom);
-    const y = p.placed.y === null ? at.y : p.placed.y - (clientY - p.startY) / (size.h * vp.zoom);
+    const origin = surface.pointInMatrix(0, 0);
+    const x = p.anchor.x === null ? at.x : toModel(p.anchor.x + (clientX - p.startX) + origin.x, 0, vp, size).x;
+    const y = p.anchor.y === null ? at.y : toModel(0, p.anchor.y + (clientY - p.startY) + origin.y, vp, size).y;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     return planDrop({ card: p.placed.card, across, up, zone: target.zone, x, y });
   }
