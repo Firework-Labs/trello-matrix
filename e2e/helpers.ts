@@ -32,3 +32,45 @@ export async function emptyMatrixSpot(page: Page): Promise<{ x: number; y: numbe
   if (!spot) throw new Error('No empty spot on the matrix');
   return spot;
 }
+
+export interface Point { x: number; y: number }
+
+/** The middle of an element's box, in page coordinates. */
+export async function centreOf(page: Page, selector: string): Promise<Point> {
+  const box = await page.locator(selector).boundingBox();
+  if (!box) throw new Error(`${selector} is not on the page`);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/** Press on a card's centre (checking the card really is what is under the pointer) and move towards `to` in 5 steps, leaving the button down. */
+export async function startDrag(page: Page, id: string, to: Point): Promise<Point> {
+  const from = await centreOf(page, `[data-card-id="${id}"]`);
+  const under = await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest('[data-card-id]')?.getAttribute('data-card-id') ?? null, [from.x, from.y]);
+  if (under !== id) throw new Error(`Card ${id} is covered at its centre by ${under}`);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 5 });
+  return from;
+}
+
+/** Drag a card's centre to a page point and let go. */
+export async function dragCardToPoint(page: Page, id: string, to: Point): Promise<void> {
+  await startDrag(page, id, to);
+  await page.mouse.up();
+}
+
+/** Drag a card by `dx`, `dy` pixels and let go. */
+export async function dragCardBy(page: Page, id: string, dx: number, dy: number): Promise<void> {
+  const from = await centreOf(page, `[data-card-id="${id}"]`);
+  await dragCardToPoint(page, id, { x: from.x + dx, y: from.y + dy });
+}
+
+/** Drag a card to the middle of the element matching `selector` and let go. */
+export async function dragCardTo(page: Page, id: string, selector: string): Promise<void> {
+  await dragCardToPoint(page, id, await centreOf(page, selector));
+}
+
+/** The writes the fake store has seen so far, as method names. */
+export function storeCalls(page: Page): Promise<string[]> {
+  return store(page, s => s.calls.map(c => c.method));
+}

@@ -144,3 +144,27 @@ test('300 cards stay responsive', async ({ page }) => {
   expect(stats.p95).toBeGreaterThan(0);                                  // renders were really measured
   expect(stats.p95).toBeLessThan(50);
 });
+
+test('a stale press with no button down does not pan', async ({ page }) => {
+  await page.goto('dev.html');
+  await page.locator('[data-section="2-2"]').dblclick({ position: { x: 5, y: 5 } });
+  await expect(page.getByTestId('zoom-label')).toContainText('282%');
+  await expect(page.getByTestId('stage')).not.toHaveClass(/mm-anim/);          // the fit animation has finished
+  await nextFrames(page);
+  const before = (await page.getByTestId('matrix').boundingBox())!;
+  const spot = await emptyMatrixSpot(page);
+  // A press whose release was never seen, then a move with the button up.
+  await page.evaluate(({ x, y }) => {
+    const stage = document.querySelector('[data-testid="stage"]')!;
+    const at = (type: string, buttons: number, dx: number) => stage.dispatchEvent(new PointerEvent(type, {
+      pointerId: 9, isPrimary: true, button: 0, buttons, clientX: x + dx, clientY: y, bubbles: true,
+    }));
+    at('pointerdown', 1, 0);
+    at('pointermove', 0, 120);                       // the first of these used to start a pan (setPointerCapture then throws) ...
+    at('pointermove', 0, 140);                       // ... and the next one moved the matrix
+  }, spot);
+  await nextFrames(page);
+  const after = (await page.getByTestId('matrix').boundingBox())!;
+  expect(after.x).toBeCloseTo(before.x, 0);
+  expect(after.y).toBeCloseTo(before.y, 0);
+});

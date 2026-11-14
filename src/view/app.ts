@@ -1,6 +1,8 @@
 import type { BoardSnapshot, Card, ColourBy, Parameter } from '../model/types';
 import type { BoardStore } from '../store/board-store';
+import { attachDrag } from './drag';
 import { createSurface, type Surface } from './surface';
+import { hideToast } from './toast';
 import { clampPan, detailOf, fitSection, zoomAt, type Viewport } from './viewport';
 import './styles.css';
 
@@ -135,6 +137,7 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
   }, { signal });
   stage.addEventListener('pointermove', ev => {
     if (!press || ev.pointerId !== press.id) return;
+    if (!(ev.buttons & 1)) { endPress(ev); return; }           // a stale press: the button is already up
     const dx = ev.clientX - press.x, dy = ev.clientY - press.y;
     if (!press.panning) {
       if (Math.abs(dx) + Math.abs(dy) <= PAN_THRESHOLD) return;
@@ -146,11 +149,11 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     state.vp = clampPan({ ...state.vp, panX: press.panX + dx, panY: press.panY + dy }, surface.size());
     schedule();
   }, { signal });
-  const endPress = (ev: PointerEvent) => {
+  function endPress(ev: PointerEvent): void {
     if (!press || ev.pointerId !== press.id) return;
     press = null;
     stage.classList.remove('mm-panning');
-  };
+  }
   stage.addEventListener('pointerup', endPress, { signal });
   stage.addEventListener('pointercancel', endPress, { signal });
 
@@ -162,6 +165,25 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
   }, { signal });
 
   wholeButton.addEventListener('click', () => animateTo(WHOLE), { signal });
+
+  // ---- dragging cards ----
+
+  /** A card was clicked (pressed and released without a drag). Opening it comes with Task 12. */
+  function onCardClick(_cardId: string): void { /* nothing yet */ }
+
+  attachDrag({
+    host: main,
+    surface,
+    store,
+    view: () => state,
+    setSnapshot(next) {
+      state.snapshot = next;
+      state.cards = cardsInChosenLists(next);
+    },
+    renderNow,
+    onCardClick,
+    signal,
+  });
 
   const resizeObserver = new ResizeObserver(() => {
     state.vp = clampPan(state.vp, surface.size());
@@ -177,6 +199,7 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
       resizeObserver.disconnect();
       cancelAnimationFrame(frame);
       clearTimeout(animationTimer);
+      hideToast();
       surface.destroy();
       root.replaceChildren();
       root.classList.remove('mm-app');
