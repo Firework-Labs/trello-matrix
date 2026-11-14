@@ -3,6 +3,7 @@ import type { BoardStore } from '../store/board-store';
 import { attachDrag } from './drag';
 import { createLegend } from './legend';
 import { createParameterDialog } from './parameter-dialog';
+import { createResequenceDrawer } from './resequence-drawer';
 import { createSurface, type Surface, type SurfaceState } from './surface';
 import { createToolbar } from './toolbar';
 import { hideToast, showToast } from './toast';
@@ -98,7 +99,7 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     onColourBy(by) { choice.colourBy = by; choiceChanged(); },
     onShowImages(show) { choice.showImages = show; choiceChanged(); },
     onParams() { dialog.open(state.snapshot); },
-    onResequence() { /* the resequence dialog comes with Task 11 */ },
+    onResequence() { openResequence(); },
     onWholeMatrix() { animateTo(WHOLE); },
   }, signal);
   const legend = createLegend();
@@ -111,7 +112,13 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     onClosed() { toolbar.focusParams(); },
     signal,
   });
-  root.append(toolbar.el, main, legend.el, dialog.el);
+  const drawer = createResequenceDrawer({
+    store,
+    onChanged: boardChanged,
+    onClosed() { toolbar.focusResequence(); },
+    signal,
+  });
+  root.append(toolbar.el, main, legend.el, dialog.el, drawer.el);
 
   const surface: Surface = createSurface(main);
   const stage = surface.stage;
@@ -234,6 +241,19 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     syncToolbar();
     if (before[0] !== across || before[1] !== up) animateTo(WHOLE);
     else renderNow();
+  }
+
+  /** The board was written by the resequence drawer and read again: the cards are redrawn in their new places. */
+  function boardChanged(next: BoardSnapshot): void {
+    state.snapshot = next;
+    state.cards = cardsInLists(next, choice.listIds);
+    syncToolbar();
+    renderNow();
+  }
+
+  function openResequence(): void {
+    if (!state.snapshot.canEdit || choice.across === null || choice.up === null || typeof plot() === 'string') return;
+    drawer.open({ snapshot: state.snapshot, across: choice.across, up: choice.up, listIds: choice.listIds });
   }
 
   stage.addEventListener('wheel', ev => {

@@ -10,7 +10,7 @@ export interface ToolbarModel {
   listIds: string[];
   colourBy: ColourBy;
   showImages: boolean;
-  /** False for a person who cannot change the board: they do not see the parameters button. */
+  /** False for a person who cannot change the board: they do not see the parameters or resequence buttons. */
   canEdit: boolean;
   /** False when there is nothing to plot, so there is nothing to put in a new order. */
   canResequence: boolean;
@@ -34,6 +34,8 @@ export interface Toolbar {
   setZoomText(text: string): void;
   /** Puts the keyboard focus on the parameters button (where it returns when the dialog closes). */
   focusParams(): void;
+  /** Puts the keyboard focus on the resequence button (where it returns when the drawer closes). */
+  focusResequence(): void;
 }
 
 const NO_CHOICE = '';
@@ -185,7 +187,8 @@ export function createToolbar(handlers: ToolbarHandlers, signal: AbortSignal): T
     showImages.checked = model.showImages;
     resequence.disabled = !model.canResequence;
     params.hidden = !model.canEdit;
+    resequence.hidden = !model.canEdit;
   }
 
-  return { el: bar, update, setZoomText(text) { zoomLabel.textContent = text; }, focusParams() { params.focus(); } };
+  return { el: bar, update, setZoomText(text) { zoomLabel.textContent = text; }, focusParams() { params.focus(); }, focusResequence() { resequence.focus(); } };
 }

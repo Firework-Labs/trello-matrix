@@ -316,6 +316,47 @@ describe('fake store', () => {
     expect(inListOrder(await st.load(), 'l-ideas')).toEqual(inListOrder(s0, 'l-ideas'));
   });
 
+  test('reorderFailAfter makes one reorder stop after that many cards, and the next one finish', async () => {
+    const st = createFakeStore({ reorderFailAfter: 3 });
+    const s0 = await st.load();
+    const ids = inListOrder(s0, 'l-backlog').reverse();
+    const seen: Progress[] = [];
+    const err = await st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], p => seen.push(p)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StoreError);
+    expect(err).toMatchObject({ kind: 'network', message: 'offline' });
+    expect(seen.map(p => p.done)).toEqual([1, 2, 3]);
+    expect(seen.every(p => p.total === ids.length)).toBe(true);
+    const s1 = await st.load();
+    expect(ids.slice(0, 3).map(id => byId(s1, id).pos)).toEqual([16384, 32768, 49152]);       // the first three were written
+    expect(byId(s1, ids[3]!).pos).toBe(byId(s0, ids[3]!).pos);                                // the rest were not
+    await st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], () => {});                 // it fails only once
+    expect(inListOrder(await st.load(), 'l-backlog')).toEqual(ids);
+  });
+
+  test('undo after a reorder that was retried returns to the order from before the first attempt', async () => {
+    const st = createFakeStore({ reorderFailAfter: 3 });
+    const s0 = await st.load();
+    const before = s0.cards.filter(c => c.idList === 'l-backlog').map(c => [c.id, c.pos]);
+    const ids = inListOrder(s0, 'l-backlog').reverse();
+    await expect(st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], () => {})).rejects.toBeInstanceOf(StoreError);
+    expect((await st.load()).canUndoReorder).toBe(true);                                      // the cards that moved can be put back
+    await st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], () => {});                 // the retry
+    expect(inListOrder(await st.load(), 'l-backlog')).toEqual(ids);
+    await st.undoReorder(() => {});
+    expect((await st.load()).cards.filter(c => c.idList === 'l-backlog').map(c => [c.id, c.pos])).toEqual(before);
+    expect((await st.load()).canUndoReorder).toBe(false);
+  });
+
+  test('a reorder that follows a completed one saves its own previous positions', async () => {
+    const st = createFakeStore();
+    const ids = inListOrder(await st.load(), 'l-doing');
+    await st.reorderLists([{ listId: 'l-doing', cardIds: [...ids].reverse() }], () => {});
+    const middle = await st.load();
+    await st.reorderLists([{ listId: 'l-doing', cardIds: ids }], () => {});
+    await st.undoReorder(() => {});
+    expect(inListOrder(await st.load(), 'l-doing')).toEqual(inListOrder(middle, 'l-doing'));  // back to after the first, not before it
+  });
+
   test('undoReorder with nothing to undo is rejected as invalid', async () => {
     await expect(createFakeStore().undoReorder(() => {})).rejects.toMatchObject({ kind: 'invalid' });
   });

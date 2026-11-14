@@ -9,7 +9,8 @@ import { mountMatrix } from './view/app';
  * Page options (query string): cards=N (sample size), readonly=1, connected=0, fresh=1 (no saved view),
  * lists=id,id (the chosen lists), across=id and up=id (the axes), emptyDoing=1 (no cards in the Doing list),
  * params=N (only the first N parameters), renameLevels=0 (levels cannot be renamed),
- * extraField=Name:A,B,C (a dropdown field with these options that is not a parameter).
+ * extraField=Name:A,B,C (a dropdown field with these options that is not a parameter),
+ * reorderFailAfter=N (the first reorder stops after N cards with a network error; a retry goes through).
  */
 
 interface RenderStats { last: number; p95: number }
@@ -44,7 +45,11 @@ if (extra?.length === 2 && extra[0]) {
   });
 }
 
-const store = createFakeStore({ snapshot, connected: query.get('connected') !== '0' });
+const failAfter = query.get('reorderFailAfter');
+const store = createFakeStore({
+  snapshot, connected: query.get('connected') !== '0',
+  ...(failAfter !== null && failAfter !== '' && Number.isFinite(Number(failAfter)) ? { reorderFailAfter: Number(failAfter) } : {}),
+});
 window.__store = store;
 
 function storedView(): ViewSettings | null {

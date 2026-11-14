@@ -15,11 +15,20 @@ export interface FakeStore extends BoardStore {
 
 const invalid = (message: string) => new StoreError('invalid', message);
 
-export function createFakeStore(o: { snapshot?: BoardSnapshot; connected?: boolean } = {}): FakeStore {
+export interface FakeStoreOptions {
+  snapshot?: BoardSnapshot;
+  connected?: boolean;
+  /** The first `reorderLists` with more cards than this writes this many, then rejects once with a network error. */
+  reorderFailAfter?: number;
+}
+
+export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
   let board: BoardSnapshot = structuredClone(o.snapshot ?? sampleSnapshot());
   let connected = o.connected ?? true;
   let view: ViewSettings | null = null;
   let undoPositions: Map<string, number> | null = null;
+  let reorderInterrupted = false;                 // the last reorder stopped part-way, so the next one is its retry
+  let failReorderAfter = o.reorderFailAfter;      // spent once it has fired
   const subscribers = new Set<(snap: BoardSnapshot) => void>();
   const failures = new Map<string, StoreError>();
   const calls: FakeStore['calls'] = [];
@@ -177,9 +186,16 @@ export function createFakeStore(o: { snapshot?: BoardSnapshot; connected?: boole
         const ids = [...new Set(order.cardIds)].filter(id => inList.has(id));
         changes.push(...positionsFor(ids));
       }
-      undoPositions = new Map(changes.map(({ cardId }) => [cardId, cardNamed(cardId).pos]));
-      applyPositions(changes, onProgress);
+      // A retry keeps the positions saved by the first attempt (the cards it moved are no longer where they were).
+      const saved = reorderInterrupted && undoPositions ? undoPositions : new Map<string, number>();
+      for (const { cardId } of changes) if (!saved.has(cardId)) saved.set(cardId, cardNamed(cardId).pos);
+      undoPositions = saved;
       board.canUndoReorder = true;
+      reorderInterrupted = true;
+      const stopAfter = failReorderAfter !== undefined && failReorderAfter < changes.length ? failReorderAfter : undefined;
+      if (stopAfter !== undefined) failReorderAfter = undefined;
+      applyPositions(changes, onProgress, stopAfter);
+      reorderInterrupted = false;
     },
 
     async undoReorder(onProgress) {
@@ -187,6 +203,7 @@ export function createFakeStore(o: { snapshot?: BoardSnapshot; connected?: boole
       if (!undoPositions) throw invalid('Nothing to undo');
       applyPositions([...undoPositions].map(([cardId, pos]) => ({ cardId, pos })), onProgress);
       undoPositions = null;
+      reorderInterrupted = false;
       board.canUndoReorder = false;
     },
 
@@ -202,10 +219,12 @@ export function createFakeStore(o: { snapshot?: BoardSnapshot; connected?: boole
     async saveView(next) { checkFailure('saveView'); view = structuredClone(next); },
   };
 
-  function applyPositions(changes: { cardId: string; pos: number }[], onProgress: (p: Progress) => void) {
+  /** Writes the positions one card at a time; with `stopAfter` it rejects once that many are written. */
+  function applyPositions(changes: { cardId: string; pos: number }[], onProgress: (p: Progress) => void, stopAfter?: number) {
     changes.forEach(({ cardId, pos }, i) => {
       cardNamed(cardId).pos = pos;
       onProgress({ done: i + 1, total: changes.length });
+      if (i + 1 === stopAfter) throw new StoreError('network', 'offline');
     });
   }
 

@@ -74,3 +74,15 @@ export async function dragCardTo(page: Page, id: string, selector: string): Prom
 export function storeCalls(page: Page): Promise<string[]> {
   return store(page, s => s.calls.map(c => c.method));
 }
+
+/** The ids of a list's cards in the order Trello shows them (ascending position). */
+export function listOrder(page: Page, listId: string): Promise<string[]> {
+  return page.evaluate(id => (window as unknown as { __store: FakeStore }).__store.snapshot().cards
+    .filter(c => c.idList === id).sort((a, b) => a.pos - b.pos).map(c => c.id), listId);
+}
+
+/** Every card's list and position, by card id: to show that cards in other lists were not touched. */
+export function positions(page: Page): Promise<Record<string, { idList: string; pos: number }>> {
+  return page.evaluate(() => Object.fromEntries((window as unknown as { __store: FakeStore }).__store.snapshot().cards
+    .map(c => [c.id, { idList: c.idList, pos: c.pos }])));
+}
