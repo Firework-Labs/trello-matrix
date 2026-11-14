@@ -1,5 +1,6 @@
 import type { BoardSnapshot, DropdownField, ParamId, Parameter } from '../model/types';
 import type { BoardStore } from '../store/board-store';
+import { createModalLock } from './modal';
 
 /**
  * The parameter setup dialog: add, link, rename and remove the parameters that can go on the matrix axes.
@@ -106,6 +107,7 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
   dialog.setAttribute('aria-label', 'Parameters');
   dialog.tabIndex = -1;
   backdrop.append(dialog);
+  const modal = createModalLock(backdrop);
 
   const heading = el('h2', undefined, 'Parameters');
   const intro = el('p', 'mm-pd-note',
@@ -455,12 +457,14 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     clearError();
     render();
     backdrop.hidden = false;
+    modal.lock();
     dialog.focus();
   }
 
   function close(): void {
     if (backdrop.hidden) return;
     backdrop.hidden = true;
+    modal.unlock();
     deps.onClosed();
   }
 

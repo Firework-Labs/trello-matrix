@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { store } from './helpers';
+import { ALL_REGIONS, ALL_TOOLBAR_CONTROLS, centreOf, reachableBehind, store } from './helpers';
 
 const dialog = (page: import('@playwright/test').Page) => page.getByTestId('param-dialog');
 const row = (page: import('@playwright/test').Page, id: string) => dialog(page).locator(`[data-param="${id}"]`);
@@ -350,4 +350,18 @@ test('typing a level name again while its rename is pending ends with the input 
   const stored = await store(page, s => s.snapshot().parameters.find(p => p.id === 'f-value')!.levels[2]!);
   await expect(top).toHaveValue(stored);
   expect(stored).toBe('High');
+});
+
+test('while the dialog is open the rest of the page cannot be focused or clicked, and it can again after', async ({ page }) => {
+  await page.goto('dev.html');
+  expect(await reachableBehind(page)).toEqual({ focusable: ALL_TOOLBAR_CONTROLS, inert: [] });
+  await page.getByTestId('params').click(); await expect(dialog(page)).toBeVisible();
+  expect(await reachableBehind(page)).toEqual({ focusable: [], inert: ALL_REGIONS });
+  const swap = await centreOf(page, '[data-testid="swap"]');
+  await page.mouse.click(swap.x, swap.y);
+  await expect(page.getByTestId('across')).toHaveValue('f-cost');                          // the click did not reach Swap axes
+  await dialog(page).getByRole('button', { name: 'Done' }).click(); await expect(dialog(page)).toBeHidden();
+  expect(await reachableBehind(page)).toEqual({ focusable: ALL_TOOLBAR_CONTROLS, inert: [] });
+  await page.getByTestId('swap').click();
+  await expect(page.getByTestId('across')).toHaveValue('f-value');
 });

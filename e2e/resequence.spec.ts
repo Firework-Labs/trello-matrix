@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { FakeStore } from '../src/store/fake-store';
-import { listOrder, positions, store } from './helpers';
+import { ALL_REGIONS, ALL_TOOLBAR_CONTROLS, centreOf, listOrder, positions, reachableBehind, store } from './helpers';
 
 const drawer = (page: Page) => page.getByTestId('reseq-drawer');
 const reorderButton = (page: Page) => drawer(page).getByRole('button', { name: 'Reorder in Trello' });
@@ -225,4 +225,72 @@ test('the Escape key does not close the drawer', async ({ page }) => {
 test('read-only users do not get the button', async ({ page }) => {
   await page.goto('dev.html?readonly=1'); await expect(page.getByTestId('resequence')).toBeHidden();
   await expect(page.getByTestId('toolbar')).toBeVisible();
+});
+
+/**
+ * Tries every way of reaching the toolbar's resequence button: tabbing round the page (pressing Enter whenever the button
+ * has the focus), then its click handler called from the page. Returns whether the keyboard ever got to the button.
+ */
+async function triggerResequenceFromBehind(page: Page): Promise<boolean> {
+  let reached = false;
+  for (const key of ['Shift+Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab', 'Tab', 'Tab', 'Tab', 'Tab', 'Tab', 'Tab', 'Tab']) {
+    await page.keyboard.press(key);
+    if (await page.evaluate(() => document.activeElement?.getAttribute('data-testid') === 'resequence')) { reached = true; await page.keyboard.press('Enter'); }
+  }
+  await page.evaluate(() => document.querySelector<HTMLElement>('[data-testid="resequence"]')!.click());
+  await page.evaluate(() => document.querySelector<HTMLElement>('[data-testid="resequence"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  return reached;
+}
+
+test('the toolbar cannot start a second reorder while the first is in flight', async ({ page }) => {
+  await page.goto('dev.html');
+  await page.evaluate(() => {
+    const w = window as unknown as { __store: FakeStore; __release: () => void; __starts: number };
+    const s = w.__store; const real = s.reorderLists.bind(s); w.__starts = 0;
+    s.reorderLists = async (orders, onProgress) => {
+      w.__starts++; onProgress({ done: 3, total: 10 });
+      await new Promise<void>(resolve => { w.__release = resolve; });
+      return real(orders, onProgress);
+    };
+  });
+  await page.getByTestId('resequence').click(); await reorderButton(page).click();
+  await expect(drawer(page)).toContainText('Reordering… 3 of 10');
+  expect(await triggerResequenceFromBehind(page)).toBe(false);                                      // the keyboard never reaches the button
+  await expect(drawer(page)).toBeVisible();
+  await expect(drawer(page).getByTestId('reseq-progress')).toHaveText('Reordering… 3 of 10');
+  await expect(drawer(page).getByRole('button', { name: 'Reorder in Trello' })).toBeDisabled();
+  expect(await page.evaluate(() => (window as unknown as { __starts: number }).__starts)).toBe(1);
+  await page.evaluate(() => (window as unknown as { __release: () => void }).__release());
+  await expect(page.getByTestId('toast')).toContainText('reordered.');
+  expect(await page.evaluate(() => (window as unknown as { __starts: number }).__starts)).toBe(1);
+  expect(await store(page, s => s.calls.filter(c => c.method === 'reorderLists').length)).toBe(1);
+});
+
+test('the toolbar cannot discard a Retry that is showing', async ({ page }) => {
+  await page.goto('dev.html?reorderFailAfter=10'); await page.getByTestId('resequence').click(); await reorderButton(page).click();
+  await expect(drawer(page)).toContainText('Stopped after 10 of');
+  const sent = await store(page, s => s.calls.filter(c => c.method === 'reorderLists').map(c => JSON.stringify(c.args[0])));
+  expect(await triggerResequenceFromBehind(page)).toBe(false);
+  await expect(drawer(page)).toContainText('Stopped after 10 of');
+  await expect(drawer(page).getByRole('button', { name: 'Retry' })).toBeEnabled();
+  await expect(reorderButton(page)).toHaveCount(0);
+  expect(await store(page, s => s.calls.filter(c => c.method === 'reorderLists').length)).toBe(1);   // nothing was recomputed or sent
+  await drawer(page).getByRole('button', { name: 'Retry' }).click();
+  await expect(page.getByTestId('toast')).toContainText('reordered.');
+  const all = await store(page, s => s.calls.filter(c => c.method === 'reorderLists').map(c => JSON.stringify(c.args[0])));
+  expect(all).toEqual([sent[0], sent[0]]);                                                          // Retry sent the original orders
+});
+
+test('while the drawer is open the rest of the page cannot be focused or clicked, and it can again after', async ({ page }) => {
+  await page.goto('dev.html');
+  expect(await reachableBehind(page)).toEqual({ focusable: ALL_TOOLBAR_CONTROLS, inert: [] });
+  await page.getByTestId('resequence').click(); await expect(drawer(page)).toBeVisible();
+  expect(await reachableBehind(page)).toEqual({ focusable: [], inert: ALL_REGIONS });
+  const swap = await centreOf(page, '[data-testid="swap"]');
+  await page.mouse.click(swap.x, swap.y);
+  await expect(page.getByTestId('across')).toHaveValue('f-cost');                                   // the click did not reach Swap axes
+  await drawer(page).getByRole('button', { name: 'Cancel' }).click(); await expect(drawer(page)).toBeHidden();
+  expect(await reachableBehind(page)).toEqual({ focusable: ALL_TOOLBAR_CONTROLS, inert: [] });
+  await page.getByTestId('swap').click();
+  await expect(page.getByTestId('across')).toHaveValue('f-value');
 });

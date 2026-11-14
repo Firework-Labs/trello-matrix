@@ -86,3 +86,27 @@ export function positions(page: Page): Promise<Record<string, { idList: string; 
   return page.evaluate(() => Object.fromEntries((window as unknown as { __store: FakeStore }).__store.snapshot().cards
     .map(c => [c.id, { idList: c.idList, pos: c.pos }])));
 }
+
+const TOOLBAR_CONTROLS = ['across', 'swap', 'up', 'lists', 'colour-by', 'show-images', 'params', 'resequence', 'whole-matrix'];
+
+/**
+ * What a person can still reach behind an open dialog or drawer: the toolbar controls that take the keyboard focus,
+ * and the page regions (toolbar, matrix area, legend) that sit inside an inert part of the page.
+ */
+export function reachableBehind(page: Page): Promise<{ focusable: string[]; inert: string[] }> {
+  return page.evaluate(ids => {
+    const focusable = ids.filter(id => {
+      const control = document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+      control.focus();
+      const got = document.activeElement === control;
+      (document.activeElement as HTMLElement | null)?.blur();
+      return got;
+    });
+    const regions: Record<string, string> = { toolbar: '[data-testid="toolbar"]', main: '.mm-main', legend: '.mm-legend' };
+    const inert = Object.keys(regions).filter(name => document.querySelector(regions[name]!)!.closest('[inert]') !== null);
+    return { focusable, inert };
+  }, TOOLBAR_CONTROLS);
+}
+
+export const ALL_TOOLBAR_CONTROLS = TOOLBAR_CONTROLS;
+export const ALL_REGIONS = ['toolbar', 'main', 'legend'];

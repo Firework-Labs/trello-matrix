@@ -2,6 +2,7 @@ import { locate } from '../model/placement';
 import { resequenceList, type RankedCard } from '../model/resequence';
 import type { BoardSnapshot, List, ParamId, Parameter } from '../model/types';
 import type { BoardStore, ListOrder, Progress } from '../store/board-store';
+import { createModalLock } from './modal';
 import { showToast } from './toast';
 
 /**
@@ -102,6 +103,7 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
   drawer.setAttribute('aria-label', 'Resequence lists');
   drawer.tabIndex = -1;
   backdrop.append(drawer);
+  const modal = createModalLock(backdrop);
 
   const intro = el('p', 'mm-rs-note');
   const same = el('p', 'mm-rs-same', TEXT_SAME);
@@ -281,6 +283,7 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
   // ---- opening and closing ----
 
   function open(next: ResequenceRequest): void {
+    if (!backdrop.hidden) return;                    // already open, whatever it is doing: opening again would forget a running write or a Retry
     request = next;
     running = null;
     progress = null;
@@ -291,12 +294,14 @@ export function createResequenceDrawer(deps: ResequenceDrawerDeps): ResequenceDr
     if (planned) showPreview(planned.across, planned.up);
     sync();
     backdrop.hidden = false;
+    modal.lock();
     drawer.focus();
   }
 
   function close(): void {
     if (backdrop.hidden) return;
     backdrop.hidden = true;
+    modal.unlock();
     deps.onClosed();
   }
 
