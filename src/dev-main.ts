@@ -8,7 +8,8 @@ import { mountMatrix } from './view/app';
  *
  * Page options (query string): cards=N (sample size), readonly=1, connected=0, fresh=1 (no saved view),
  * lists=id,id (the chosen lists), across=id and up=id (the axes), emptyDoing=1 (no cards in the Doing list),
- * params=N (only the first N parameters).
+ * params=N (only the first N parameters), renameLevels=0 (levels cannot be renamed),
+ * extraField=Name:A,B,C (a dropdown field with these options that is not a parameter).
  */
 
 interface RenderStats { last: number; p95: number }
@@ -34,6 +35,14 @@ if (query.get('emptyDoing') === '1') {
   snapshot.placements = Object.fromEntries(Object.entries(snapshot.placements).filter(([id]) => snapshot.cards.some(c => c.id === id)));
 }
 if (query.has('params')) snapshot.parameters = snapshot.parameters.slice(0, Number(query.get('params')));
+
+const extra = query.get('extraField')?.split(':');
+if (extra?.length === 2 && extra[0]) {
+  snapshot.dropdownFields.push({
+    id: `f-${extra[0].toLowerCase()}`, name: extra[0],
+    options: extra[1]!.split(',').map((text, i) => ({ id: `f-${extra[0]!.toLowerCase()}-o${i}`, text, colour: 'none' })),
+  });
+}
 
 const store = createFakeStore({ snapshot, connected: query.get('connected') !== '0' });
 window.__store = store;
@@ -77,5 +86,5 @@ function recordRender(ms: number): void {
 
 void (async () => {
   if (view) await fakeSaveView(view);
-  await mountMatrix(document.getElementById('app')!, devStore, { onRenderTime: recordRender });
+  await mountMatrix(document.getElementById('app')!, devStore, { onRenderTime: recordRender, canRenameLevels: query.get('renameLevels') !== '0' });
 })();

@@ -2,6 +2,7 @@ import type { BoardSnapshot, Card, ColourBy, ParamId, Parameter, ViewSettings } 
 import type { BoardStore } from '../store/board-store';
 import { attachDrag } from './drag';
 import { createLegend } from './legend';
+import { createParameterDialog } from './parameter-dialog';
 import { createSurface, type Surface, type SurfaceState } from './surface';
 import { createToolbar } from './toolbar';
 import { hideToast, showToast } from './toast';
@@ -10,7 +11,8 @@ import './styles.css';
 
 export interface MatrixOptions {
   focusCardId?: string;          // used from Task 12
-  canRenameLevels?: boolean;     // used from Task 10; default true
+  /** Whether a level can be renamed in the parameter dialog. Default true. */
+  canRenameLevels?: boolean;
   /** Called with the milliseconds each render took (the dev page collects them). */
   onRenderTime?: (ms: number) => void;
 }
@@ -95,14 +97,21 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     },
     onColourBy(by) { choice.colourBy = by; choiceChanged(); },
     onShowImages(show) { choice.showImages = show; choiceChanged(); },
-    onParams() { /* the parameter dialog comes with Task 10 */ },
+    onParams() { dialog.open(state.snapshot); },
     onResequence() { /* the resequence dialog comes with Task 11 */ },
     onWholeMatrix() { animateTo(WHOLE); },
   }, signal);
   const legend = createLegend();
   const main = document.createElement('div');
   main.className = 'mm-main';
-  root.append(toolbar.el, main, legend.el);
+  const dialog = createParameterDialog({
+    store,
+    canRenameLevels: opts.canRenameLevels ?? true,
+    onChanged: parametersChanged,
+    onClosed() { toolbar.focusParams(); },
+    signal,
+  });
+  root.append(toolbar.el, main, legend.el, dialog.el);
 
   const surface: Surface = createSurface(main);
   const stage = surface.stage;
@@ -123,7 +132,7 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
   function syncToolbar(): void {
     toolbar.update({
       parameters: state.snapshot.parameters, lists: state.snapshot.lists, dropdownFields: state.snapshot.dropdownFields,
-      ...choice, canResequence: typeof plot() !== 'string',
+      ...choice, canEdit: state.snapshot.canEdit, canResequence: typeof plot() !== 'string',
     });
   }
 
@@ -209,6 +218,24 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     animateTo(WHOLE);
   }
 
+  /**
+   * The parameters changed in the dialog (added, linked, renamed or removed) and the board was read again.
+   * An axis whose parameter is gone moves to another parameter that is not on the other axis.
+   */
+  function parametersChanged(next: BoardSnapshot): void {
+    state.snapshot = next;
+    state.cards = cardsInLists(next, choice.listIds);
+    const exists = (id: ParamId | null): id is ParamId => next.parameters.some(p => p.id === id);
+    const before = [choice.across, choice.up];
+    const across = exists(choice.across) ? choice.across : next.parameters.find(p => p.id !== choice.up)?.id ?? null;
+    const up = exists(choice.up) ? choice.up : next.parameters.find(p => p.id !== across)?.id ?? null;
+    choice.across = across;
+    choice.up = up;
+    syncToolbar();
+    if (before[0] !== across || before[1] !== up) animateTo(WHOLE);
+    else renderNow();
+  }
+
   stage.addEventListener('wheel', ev => {
     ev.preventDefault();
     if (typeof plot() === 'string') return;
@@ -284,6 +311,7 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
   state.vp = clampPan(state.vp, surface.size());     // a saved pan from a different window size
   syncToolbar();
   renderNow();
+  if (snapshot.canEdit && snapshot.parameters.length < 2) dialog.open(state.snapshot);   // nothing can be plotted without them
 
   return {
     destroy() {

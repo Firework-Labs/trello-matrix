@@ -10,6 +10,8 @@ export interface ToolbarModel {
   listIds: string[];
   colourBy: ColourBy;
   showImages: boolean;
+  /** False for a person who cannot change the board: they do not see the parameters button. */
+  canEdit: boolean;
   /** False when there is nothing to plot, so there is nothing to put in a new order. */
   canResequence: boolean;
 }
@@ -30,6 +32,8 @@ export interface Toolbar {
   el: HTMLElement;
   update(model: ToolbarModel): void;
   setZoomText(text: string): void;
+  /** Puts the keyboard focus on the parameters button (where it returns when the dialog closes). */
+  focusParams(): void;
 }
 
 const NO_CHOICE = '';
@@ -180,7 +184,8 @@ export function createToolbar(handlers: ToolbarHandlers, signal: AbortSignal): T
     colourBy.value = encodeColour(model.colourBy);
     showImages.checked = model.showImages;
     resequence.disabled = !model.canResequence;
+    params.hidden = !model.canEdit;
   }
 
-  return { el: bar, update, setZoomText(text) { zoomLabel.textContent = text; } };
+  return { el: bar, update, setZoomText(text) { zoomLabel.textContent = text; }, focusParams() { params.focus(); } };
 }
