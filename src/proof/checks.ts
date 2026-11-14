@@ -20,6 +20,8 @@ const P2_TIMEOUT_MS = 90_000;
 const P2_POLL_MS = 1000;
 const IMAGE_TIMEOUT_MS = 10_000;
 const BURST = 30;
+const RESTORE_ATTEMPTS = 3;
+const RESTORE_PAUSE_MS = 3000;
 const P4_KEY = 'mxproof.p4';
 const RENAMED = 'Renamed';
 
@@ -115,11 +117,16 @@ const p2 = check('P2', 'A change by another person arrives without a reload', tr
     renderFired = true;
     void look().catch(() => undefined);
   });
-  baseline = await d.t.get(...PING);
-  armed = true;
-  while (seenAfter === null && d.now() - started < P2_TIMEOUT_MS) {
-    await sleep(P2_POLL_MS);
-    await look();
+  try {
+    baseline = await d.t.get(...PING);
+    armed = true;
+    while (seenAfter === null && d.now() - started < P2_TIMEOUT_MS) {
+      await sleep(P2_POLL_MS);
+      await look();
+    }
+  } finally {
+    armed = false;
+    await d.t.remove(...PING).catch(() => undefined); // leave nothing behind in the board's Power-Up data
   }
   if (seenAfter === null) return { status: 'fail', detail: `no ping seen within ${P2_TIMEOUT_MS / 1000} s. render fired: ${renderFired ? 'yes' : 'no'}` };
   return { status: 'pass', detail: `render fired: ${renderFired ? 'yes' : 'no'}, seen after ${seenAfter} ms (the two computers' clocks may differ by a second or two)` };
@@ -128,23 +135,30 @@ const p2 = check('P2', 'A change by another person arrives without a reload', tr
 // ---- P3: REST authorisation and whether it survives a reload -----------------
 
 const P3_MARKER = ['member', 'private', 'mxproofAuth'] as const;
+const userAgent = () => globalThis.navigator?.userAgent ?? '';
 
 const p3 = check('P3', 'REST authorisation works and persists', true, async d => {
   const api = d.t.getRestApi();
-  if (!(await api.isAuthorized())) await api.authorize({ scope: 'read,write', expiration: 'never' });
+  // Straight from the click, with nothing awaited first (Safari may block a popup after an async gap).
+  // Always called, even when a token exists, so every run tests the sign-in itself.
+  await api.authorize({ scope: 'read,write', expiration: 'never' });
   if (!(await api.isAuthorized())) return { status: 'fail', detail: 'authorised now: no (authorise returned but isAuthorized is still false)' };
-  await d.t.set(...P3_MARKER, d.now());
+  await d.t.set(...P3_MARKER, { ua: userAgent(), at: d.now() });
   return { status: 'manual', detail: 'authorised now: yes. Now reload this page; the result for "after reload" replaces this row.' };
 });
 
-/** Run on every page load. Reports on P3 only if authorisation was tried before. */
+/**
+ * Run on every page load. Reports on P3 only if this same browser authorised before, and only once:
+ * the marker is removed after it reports, so a later load (or another browser) is not told a stale answer.
+ */
 export async function p3AfterReload(d: Pick<CheckDeps, 't' | 'now'>): Promise<CheckResult | null> {
   const title = 'REST authorisation works and persists';
   try {
     const marker = await d.t.get(...P3_MARKER);
-    if (marker === undefined) return null;
+    if (!marker || marker.ua !== userAgent()) return null;
+    await d.t.remove(...P3_MARKER);
     const still = await d.t.getRestApi().isAuthorized();
-    return { id: 'P3', title, status: still ? 'pass' : 'fail', detail: `authorised now: yes, after reload: ${still ? 'yes' : 'no'}` };
+    return { id: 'P3', title, status: still ? 'pass' : 'fail', detail: `authorised after reload: ${still ? 'yes' : 'no'}` };
   } catch (e) {
     return { id: 'P3', title, status: 'fail', detail: errorText(e) };
   }
@@ -170,6 +184,7 @@ const p4 = check('P4', P4_TITLE, true, async d => {
 export function p4Survived(): CheckResult | null {
   if (p4Stamp === null) return null;
   p4Stamp = null;
+  globalThis.sessionStorage?.removeItem(P4_KEY);
   return { id: 'P4', title: P4_TITLE, status: 'manual', detail: 'matrix stayed open' };
 }
 
@@ -195,6 +210,16 @@ function loadImageElement(url: string): Promise<boolean> {
 
 interface RestCard { id: string; cover?: { scaled?: { url: string }[] } | null }
 
+/** The token may only go to Trello itself; cover images can come from other hosts. */
+function isTrelloHost(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && (u.hostname === 'trello.com' || u.hostname.endsWith('.trello.com'));
+  } catch {
+    return false;
+  }
+}
+
 const p5 = check('P5', 'A card cover image can be shown', false, async d => {
   const tok = await token(d);
   const board = await d.t.board('id');
@@ -205,15 +230,17 @@ const p5 = check('P5', 'A card cover image can be shown', false, async d => {
 
   if (await (d.loadImage ?? loadImageElement)(url)) return { status: 'pass', detail: 'img works (a plain image tag loads the cover)' };
 
+  const trello = isTrelloHost(url);
+  const how = trello ? 'with the Authorization header' : 'without the Authorization header, because the image is not hosted by Trello';
   let fetched = 'fetch failed';
   try {
-    const r = await d.fetch(url, { headers: { Authorization: authHeader(d, tok) } });
+    const r = await d.fetch(url, trello ? { headers: { Authorization: authHeader(d, tok) } } : undefined);
     if (r.ok && (await r.blob()).size > 0) {
-      return { status: 'pass', detail: 'fetch works (img did not load; fetching with the Authorization header does)' };
+      return { status: 'pass', detail: `fetch works (img did not load; fetching ${how} does)` };
     }
-    fetched = `fetch failed: HTTP ${r.status}`;
+    fetched = `fetch ${how} failed: HTTP ${r.status}`;
   } catch (e) {
-    fetched = `fetch failed: ${errorText(e)}`;
+    fetched = `fetch ${how} failed: ${errorText(e)}`;
   }
   return { status: 'fail', detail: `img did not load; ${fetched}` };
 });
@@ -229,8 +256,24 @@ const p6 = check('P6', 'Which list positions are accepted, and how fast', false,
   const readPos = async () => ((await (await mustBeOk(await rest(d, tok, 'GET', `${cardPath}?fields=pos`), 'Read pos')).json()) as { pos: number }).pos;
 
   const original = await readPos();
-  const accepted: string[] = [];
+
+  // Put the card back where it was. A 429 is a normal answer here, not an exception, so check
+  // the status, wait, retry, and read the position back before saying it worked.
+  const restore = async (): Promise<boolean> => {
+    for (let attempt = 0; attempt < RESTORE_ATTEMPTS; attempt++) {
+      if (attempt > 0) await sleep(RESTORE_PAUSE_MS);
+      try {
+        const r = await rest(d, tok, 'PUT', `${cardPath}?pos=${original}`);
+        if (r.ok && (await readPos()) === original) return true;
+      } catch { /* try again */ }
+    }
+    return false;
+  };
+
+  let outcome: Outcome | undefined;
+  let failure = '';
   try {
+    const accepted: string[] = [];
     for (const value of ['top', 'bottom', 65536.5]) {
       const r = await rest(d, tok, 'PUT', `${cardPath}?pos=${value}`);
       if (!r.ok) throw new Error(`pos=${value} was refused: HTTP ${r.status}`);
@@ -246,13 +289,14 @@ const p6 = check('P6', 'Which list positions are accepted, and how fast', false,
     }
     const elapsed = d.now() - started;
     const header = lastRemaining === null ? 'x-rate-limit-api-token-remaining: not readable' : `x-rate-limit-api-token-remaining: ${lastRemaining}`;
-    return {
-      status: 'pass',
-      detail: `accepted: ${accepted.join(', ')}; ${BURST} requests in ${elapsed} ms, 429s: ${tooMany}; ${header}`,
-    };
-  } finally {
-    await rest(d, tok, 'PUT', `${cardPath}?pos=${original}`).catch(() => undefined);
+    outcome = { status: 'pass', detail: `accepted: ${accepted.join(', ')}; ${BURST} requests in ${elapsed} ms, 429s: ${tooMany}; ${header}` };
+  } catch (e) {
+    failure = errorText(e);
   }
+  const restored = await restore();
+  const note = restored ? 'card position restored' : `card position not restored: set card ${card.id} back to position ${original} by hand`;
+  if (!outcome) return { status: 'fail', detail: `${failure}; ${note}` };
+  return { status: restored ? 'pass' : 'fail', detail: `${outcome.detail}; ${note}` };
 });
 
 // ---- P7: create a dropdown field and rename one of its options ---------------

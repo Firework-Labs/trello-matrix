@@ -1,11 +1,13 @@
 import { APP_KEY, APP_NAME } from '../config';
 import { checks, p3AfterReload, p4Closed, p4Survived, writeCheckIds, writePing } from './checks';
 import type { CheckDeps, CheckResult } from './checks';
+import { loadResults, saveResults } from './results';
 
 const t = TrelloPowerUp.iframe({ appKey: APP_KEY, appName: APP_NAME });
 const deps: CheckDeps = { t, fetch: (...args) => window.fetch(...args), key: APP_KEY, now: () => Date.now() };
 
-const results = new Map<string, CheckResult>();
+const storage = (() => { try { return window.sessionStorage; } catch { return undefined; } })();
+const results = new Map<string, CheckResult>(loadResults(storage).map(r => [r.id, r]));
 const writeButtons: HTMLButtonElement[] = [];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
@@ -16,13 +18,20 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string,
 
 const resultsBody = el('tbody');
 
-function show(result: CheckResult) {
-  results.set(result.id, result);
+const RUNNING = 'Running…';
+
+function renderResults() {
   resultsBody.replaceChildren(
     ...[...results.values()].sort((a, b) => a.id.localeCompare(b.id)).map(r =>
       el('tr', {}, el('td', {}, r.id), el('td', {}, r.title), el('td', { className: r.status }, r.status),
         el('td', {}, r.detail), el('td', {}, r.ms === undefined ? '' : String(r.ms)))),
   );
+}
+
+function show(result: CheckResult) {
+  results.set(result.id, result);
+  saveResults(storage, [...results.values()].filter(r => r.detail !== RUNNING));
+  renderResults();
 }
 
 const testBoard = el('input', { type: 'checkbox', id: 'testboard' });
@@ -41,7 +50,7 @@ function runButton(id: string, run: () => Promise<void>, writes: boolean) {
 
 const checkRows = checks.map(c => {
   const actions: HTMLElement[] = [runButton(c.id, async () => {
-    show({ id: c.id, title: c.title, status: 'manual', detail: 'Running…' });
+    show({ id: c.id, title: c.title, status: 'manual', detail: RUNNING });
     show(await c.run(deps));
   }, writeCheckIds.includes(c.id))];
   if (c.id === 'P2') {
@@ -80,6 +89,7 @@ document.getElementById('app')!.append(
   copyBox,
 );
 
+renderResults(); // results kept from before a reload
 // Things that happen on their own: after a reload (P3, P4) and when focus returns (P4).
 const closed = p4Closed();
 if (closed) show(closed);

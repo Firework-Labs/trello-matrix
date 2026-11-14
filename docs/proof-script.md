@@ -8,6 +8,10 @@ Call the two people **A** and **B**. They can be you and a second person, or
 you with a second Trello account in another window. Use the **test board**
 only.
 
+Use **one browser tab** for each round and do not close it until you have
+copied the results. The page remembers the results in that tab, so reloading
+the page or pressing **Matrix checks** again does not lose them.
+
 You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 **Copy results** at the end of each round.
 
@@ -27,7 +31,8 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 2. **Person A: press Run on P3.** A Trello window asks you to allow access.
    Press **Allow**. The row says `manual`, and that is expected.
 3. **Person A: reload the page** (the browser's reload button, or Cmd+R).
-   After a moment, P3 shows a result. It should say `pass`.
+   After a moment, P3 shows a result. It should say `pass`. Your earlier
+   results stay in the table.
    - If a window asks you to allow access again, that is itself the answer;
      allow it and carry on.
 4. **Person A: press Run on P5.** It needs a card with a cover image. If the
@@ -47,8 +52,8 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 10. **Person A: close the card** and look at the page again. A moment later, the
     P4 row says either `matrix stayed open` or `matrix was closed`. If it says
     nothing, click inside the page once.
-    - If the matrix was closed, press **Matrix checks** again. The page then
-      reports it.
+    - If the matrix was closed, press **Matrix checks** again in the same
+      tab. The page then reports it, and the earlier results are still there.
 11. Look at the **Results** table. Every row should have an answer. Write down
     anything odd you saw on screen (windows that popped up, things that
     flickered).
