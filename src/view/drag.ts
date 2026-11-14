@@ -1,5 +1,5 @@
 import { planDrop, type DropPlan, type LevelChange } from '../model/drop';
-import type { BoardSnapshot, Parameter, ParamId } from '../model/types';
+import type { BoardSnapshot, Card, Parameter, ParamId } from '../model/types';
 import type { BoardStore } from '../store/board-store';
 import type { DropTarget, PlacedCard, Surface } from './surface';
 import { showToast } from './toast';
@@ -15,9 +15,16 @@ export interface DragContext {
   store: Pick<BoardStore, 'setLevel' | 'savePositions'>;
   /** What the view shows right now. */
   view(): { snapshot: BoardSnapshot; across: Parameter; up: Parameter; vp: Viewport };
-  /** Replaces the snapshot with one that includes the writes that were saved. Does not draw. */
-  setSnapshot(next: BoardSnapshot): void;
+  /**
+   * Lays what a drop saved over the snapshot as it is now (not as it was when the drop began: the other person's
+   * changes may have arrived meanwhile, and a snapshot read before the writes finished must not undo them). Does not draw.
+   */
+  applyWrite(change: (snapshot: BoardSnapshot) => BoardSnapshot): void;
   renderNow(): void;
+  /** Whether this person can change the board right now. When not, cards are not lifted and nothing is written. */
+  canEdit(): boolean;
+  /** Whether the card is still in the cards that are plotted (it may have been archived or moved to another list by the other person). */
+  isPlotted(cardId: string): boolean;
   /** A press and release on a card without a drag. */
   onCardClick(cardId: string): void;
   signal: AbortSignal;
@@ -74,6 +81,8 @@ interface Press {
   anchor: { x: number | null; y: number | null };
   /** Set once the pointer has moved CLICK_SLOP: the card's page rectangle at that moment. */
   lifted: DOMRect | null;
+  /** The pointer went CLICK_SLOP away without a card being lifted (nobody can drag here): not a click either. */
+  strayed: boolean;
 }
 
 /**
@@ -109,7 +118,7 @@ export function attachDrag(ctx: DragContext): void {
     const placed = cardId === undefined ? undefined : surface.placementOf(cardId);
     if (cardId === undefined || !placed) return;
     cancel();                                                 // a stale press whose release never arrived
-    press = { pointerId: ev.pointerId, cardId, startX: ev.clientX, startY: ev.clientY, placed, anchor: anchorOf(placed), lifted: null };
+    press = { pointerId: ev.pointerId, cardId, startX: ev.clientX, startY: ev.clientY, placed, anchor: anchorOf(placed), lifted: null, strayed: false };
     host.setPointerCapture(ev.pointerId);
   }, { signal });
 
@@ -119,6 +128,7 @@ export function attachDrag(ctx: DragContext): void {
     const dx = ev.clientX - press.startX, dy = ev.clientY - press.startY;
     if (!press.lifted) {
       if (Math.hypot(dx, dy) < CLICK_SLOP) return;
+      if (!ctx.canEdit()) { press.strayed = true; return; }
       press.lifted = surface.lift(press.cardId);
       if (!press.lifted) { end(); return; }
     }
@@ -130,7 +140,10 @@ export function attachDrag(ctx: DragContext): void {
     if (!press || ev.pointerId !== press.pointerId || ev.button !== 0) return;
     const p = press;
     end();
-    if (!p.lifted) { ctx.onCardClick(p.cardId); return; }
+    if (!p.lifted) {
+      if (!p.strayed) ctx.onCardClick(p.cardId);
+      return;
+    }
     surface.setDropTarget(null);
     void drop(p, ev.clientX, ev.clientY);
   }, { signal });
@@ -156,7 +169,7 @@ export function attachDrag(ctx: DragContext): void {
    * view was zoomed during the drag the saved position is still where the card is shown. Null when a
    * position cannot be computed (a stage with no size), so nothing is ever planned from a non-finite number.
    */
-  function planFor(p: Press, target: DropTarget, clientX: number, clientY: number): DropPlan | null {
+  function planFor(p: Press, card: Card, target: DropTarget, clientX: number, clientY: number): DropPlan | null {
     const { across, up, vp } = ctx.view();
     const size = surface.size();
     const pointer = surface.pointInMatrix(clientX, clientY);
@@ -165,13 +178,17 @@ export function attachDrag(ctx: DragContext): void {
     const x = p.anchor.x === null ? at.x : toModel(p.anchor.x + (clientX - p.startX) + origin.x, 0, vp, size).x;
     const y = p.anchor.y === null ? at.y : toModel(0, p.anchor.y + (clientY - p.startY) + origin.y, vp, size).y;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    return planDrop({ card: p.placed.card, across, up, zone: target.zone, x, y });
+    return planDrop({ card, across, up, zone: target.zone, x, y });
   }
 
   async function drop(p: Press, clientX: number, clientY: number): Promise<void> {
+    // The card may have gone while it was in the hand (archived, or moved to a list that is not plotted): then the drop is discarded.
+    // The levels it has now, not the ones it had at the press, decide what is written.
+    const current = ctx.isPlotted(p.cardId) ? surface.placementOf(p.cardId) : undefined;
     const target = surface.dropTargetAt(clientX, clientY);
-    // Outside every zone, or from the tray back into the tray: nothing to write.
-    const plan = target && !(target.zone === 'tray' && p.placed.zone === 'tray') ? planFor(p, target, clientX, clientY) : null;
+    // Outside every zone, or from the tray back into the tray, or nothing may be written: nothing to write.
+    const plan = current && ctx.canEdit() && target && !(target.zone === 'tray' && p.placed.zone === 'tray')
+      ? planFor(p, current.card, target, clientX, clientY) : null;
     if (!plan) { putBack(p.cardId); return; }
 
     // The card stays where it was dropped while the writes run.
@@ -191,7 +208,8 @@ export function attachDrag(ctx: DragContext): void {
     // Whatever was saved is in the snapshot, so the view never shows something the store does not hold.
     const saved = failure === null;
     if (saved || written.length) {
-      ctx.setSnapshot(withMove(ctx.view().snapshot, p.cardId, written, saved ? plan.positions : null));
+      const positions = saved ? plan.positions : null;
+      ctx.applyWrite(snapshot => snapshot.cards.some(c => c.id === p.cardId) ? withMove(snapshot, p.cardId, written, positions) : snapshot);
     }
     surface.release(p.cardId);
     ctx.renderNow();

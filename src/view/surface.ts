@@ -43,7 +43,18 @@ export interface Surface {
   moveLifted(cardId: string, left: number, top: number): void;
   /** Puts a lifted card back in its zone; the next `render` draws it where the model says it belongs. */
   release(cardId: string): void;
+  /** Marks one card (and no other) as the one to look at, or none with null. A card in the tray is scrolled into view. */
+  highlight(cardId: string | null): void;
   destroy(): void;
+}
+
+export interface SurfaceOptions {
+  /**
+   * The address of a card's cover picture, asked for when the card is drawn in full detail and on screen with
+   * Show images on. Asked at most once per card for the life of the surface; null, a rejection or a picture
+   * that does not load all mean the card has no picture, and nothing is reported.
+   */
+  coverImage?(cardId: string): Promise<string | null>;
 }
 
 /** The label under a dot, chip or full card; the same tray form is used at every zoom. */
@@ -67,13 +78,15 @@ interface CardView {
   x: number | null;
   y: number | null;
   colour: string;
+  /** The empty cover placeholder this card shows while its picture is awaited, if any. */
+  cover: HTMLElement | null;
   /** What the element currently shows, so unchanged cards are not touched. */
   shown: { zone: Zone; detail: string; card: Card; colour: string; left: string; top: string };
 }
 
 interface AxisLabel { el: HTMLElement; shown: string }
 
-export function createSurface(host: HTMLElement): Surface {
+export function createSurface(host: HTMLElement, options: SurfaceOptions = {}): Surface {
   const tray = el('aside', 'mm-tray');
   tray.dataset.testid = 'tray';
   const trayHeading = el('h4');
@@ -117,6 +130,47 @@ export function createSurface(host: HTMLElement): Surface {
   const lifted = new Set<string>();                 // cards in the drag layer; renders do not touch them
   let needsSync = false;                            // a card was released and may be in the wrong parent
   let hot: HTMLElement | null = null;
+  let highlighted: string | null = null;
+
+  // ---- cover pictures: asked for once a full card with a cover is on screen, kept for the session ----
+
+  const coverUrls = new Map<string, string>();                 // the pictures that are known
+  const coverAsked = new Set<string>();                        // the cards whose picture was asked for, however it went
+  const slotOwner = new WeakMap<Element, string>();            // placeholder → card id
+  const onScreen = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      onScreen.unobserve(entry.target);
+      const id = slotOwner.get(entry.target);
+      if (id !== undefined) void requestCover(id);
+    }
+  });
+
+  function coverImage(url: string): HTMLImageElement {
+    const img = el('img', 'mm-cover');
+    img.dataset.cover = '';
+    img.alt = '';
+    img.draggable = false;
+    img.src = url;
+    img.addEventListener('error', () => img.remove(), { once: true });          // a picture that will not load is no picture
+    return img;
+  }
+
+  async function requestCover(id: string): Promise<void> {
+    if (!options.coverImage || coverAsked.has(id)) return;
+    coverAsked.add(id);
+    let url: string | null = null;
+    try {
+      url = await options.coverImage(id);
+    } catch { /* no picture, and nothing to report */ }
+    if (!url) return;
+    coverUrls.set(id, url);
+    const v = views.get(id);
+    if (!v?.cover) return;
+    onScreen.unobserve(v.cover);
+    v.cover.replaceWith(coverImage(url));                       // the same box, so the card does not change size
+    v.cover = null;
+  }
 
   /** The exact box, not clientWidth's rounded one, so positions and pointer conversions agree to the sub-pixel. */
   function size(): Size {
@@ -134,10 +188,20 @@ export function createSurface(host: HTMLElement): Surface {
   function cardContent(v: CardView, detail: Detail, state: SurfaceState): void {
     const { card } = v;
     const body: HTMLElement[] = [];
+    if (v.cover) { onScreen.unobserve(v.cover); v.cover = null; }
     if (detail === 'chip') {
       body.push(el('div', 'mm-title', card.name));
     } else if (detail === 'full') {
-      if (card.hasCover && state.showImages) body.push(el('div', 'mm-cover'));
+      if (card.hasCover && state.showImages) {
+        const url = coverUrls.get(card.id);
+        if (url) {
+          body.push(coverImage(url));
+        } else {
+          v.cover = el('div', 'mm-cover');
+          slotOwner.set(v.cover, card.id);
+          body.push(v.cover);
+        }
+      }
       body.push(el('div', 'mm-title', card.name));
       const pills = state.snapshot.labels.filter(l => card.labelIds.includes(l.id));
       if (pills.length) {
@@ -164,6 +228,7 @@ export function createSurface(host: HTMLElement): Surface {
       if (tags.childElementCount) body.push(tags);
     }
     v.el.replaceChildren(...body);
+    if (v.cover) onScreen.observe(v.cover);
   }
 
   function rebuildModel(state: SurfaceState): void {
@@ -185,7 +250,7 @@ export function createSurface(host: HTMLElement): Surface {
       if (!v) {
         const e = el('div');
         e.dataset.cardId = card.id;
-        v = { el: e, card, zone: at.zone, x: at.x, y: at.y, colour, shown: { zone: at.zone, detail: '', card, colour: '', left: '', top: '' } };
+        v = { el: e, card, zone: at.zone, x: at.x, y: at.y, colour, cover: null, shown: { zone: at.zone, detail: '', card, colour: '', left: '', top: '' } };
       }
       Object.assign(v, { card, zone: at.zone, x: at.x, y: at.y, colour });
       if (contentChanged) v.shown.detail = '';          // forces the next render to rewrite this card
@@ -198,6 +263,7 @@ export function createSurface(host: HTMLElement): Surface {
     }
     for (const [id, v] of views) {
       if (next.has(id)) continue;
+      if (v.cover) onScreen.unobserve(v.cover);
       v.el.remove();
       lifted.delete(id);
     }
@@ -306,6 +372,7 @@ export function createSurface(host: HTMLElement): Surface {
       const shown = v.shown;
       if (v.zone === 'tray') {
         if (shown.detail !== TRAY_DETAIL || shown.zone !== 'tray' || shown.card !== v.card || shown.colour !== v.colour) {
+          if (v.cover) { onScreen.unobserve(v.cover); v.cover = null; }
           v.el.className = 'mm-tray-card';
           v.el.dataset.zone = 'tray';
           v.el.dataset.detail = TRAY_DETAIL;
@@ -355,7 +422,7 @@ export function createSurface(host: HTMLElement): Surface {
 
   function showHint(text: string): void {
     if (hint.hidden) {
-      for (const v of views.values()) v.el.remove();      // lifted cards too
+      for (const v of views.values()) { if (v.cover) onScreen.unobserve(v.cover); v.el.remove(); }      // lifted cards too
       views.clear();
       lifted.clear();
       for (const s of sections) s.remove();
@@ -441,7 +508,17 @@ export function createSurface(host: HTMLElement): Surface {
     needsSync = true;
   }
 
+  function highlight(cardId: string | null): void {
+    if (highlighted !== null) views.get(highlighted)?.el.removeAttribute('data-highlight');
+    highlighted = cardId;
+    const v = cardId === null ? undefined : views.get(cardId);
+    if (!v) return;
+    v.el.setAttribute('data-highlight', '');
+    if (v.zone === 'tray') v.el.scrollIntoView({ block: 'nearest' });
+  }
+
   function destroy(): void {
+    onScreen.disconnect();
     tray.remove();
     stage.remove();
     dragLayer.remove();
@@ -449,5 +526,5 @@ export function createSurface(host: HTMLElement): Surface {
     lifted.clear();
   }
 
-  return { stage, size, pointInMatrix, render, showHint, placementOf, dropTargetAt, setDropTarget, lift, moveLifted, release, destroy };
+  return { stage, size, pointInMatrix, render, showHint, placementOf, dropTargetAt, setDropTarget, lift, moveLifted, release, highlight, destroy };
 }

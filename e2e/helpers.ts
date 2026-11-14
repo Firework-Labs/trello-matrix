@@ -110,3 +110,12 @@ export function reachableBehind(page: Page): Promise<{ focusable: string[]; iner
 
 export const ALL_TOOLBAR_CONTROLS = TOOLBAR_CONTROLS;
 export const ALL_REGIONS = ['toolbar', 'main', 'legend'];
+
+/** Wheel-zoom in on a card until it is drawn as a full card, and let the page draw it. */
+export async function zoomToFull(page: Page, id: string): Promise<void> {
+  const at = await centreOf(page, `[data-card-id="${id}"]`);
+  await page.mouse.move(at.x, at.y);
+  await wheelZoom(page, 8);
+  await page.locator(`[data-card-id="${id}"][data-detail="full"]`).waitFor();
+  await nextFrames(page);
+}

@@ -10,7 +10,8 @@ import { mountMatrix } from './view/app';
  * lists=id,id (the chosen lists), across=id and up=id (the axes), emptyDoing=1 (no cards in the Doing list),
  * params=N (only the first N parameters), renameLevels=0 (levels cannot be renamed),
  * extraField=Name:A,B,C (a dropdown field with these options that is not a parameter),
- * reorderFailAfter=N (the first reorder stops after N cards with a network error; a retry goes through).
+ * reorderFailAfter=N (the first reorder stops after N cards with a network error; a retry goes through),
+ * focus=cardId ("Show on matrix": open zoomed to that card).
  */
 
 interface RenderStats { last: number; p95: number }
@@ -91,5 +92,7 @@ function recordRender(ms: number): void {
 
 void (async () => {
   if (view) await fakeSaveView(view);
-  await mountMatrix(document.getElementById('app')!, devStore, { onRenderTime: recordRender, canRenameLevels: query.get('renameLevels') !== '0' });
+  await mountMatrix(document.getElementById('app')!, devStore, {
+    onRenderTime: recordRender, canRenameLevels: query.get('renameLevels') !== '0', focusCardId: query.get('focus') ?? undefined,
+  });
 })();

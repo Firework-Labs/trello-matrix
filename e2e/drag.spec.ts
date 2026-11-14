@@ -253,7 +253,7 @@ test('a press that barely moves is a click, not a drag', async ({ page }) => {
   await page.mouse.move(c.x + 3, c.y, { steps: 3 });
   await expect(card(page, 'c1')).not.toHaveAttribute('data-dragging', '');
   await page.mouse.up();
-  expect(await storeCalls(page)).toEqual([]);
+  expect(await storeCalls(page)).toEqual(['openCard']);                       // since Task 12 a click opens the card; it writes nothing
   await expect(page.getByTestId('toast')).toBeHidden();
   await expect(card(page, 'c1')).toHaveAttribute('data-zone', 'matrix');
 });
