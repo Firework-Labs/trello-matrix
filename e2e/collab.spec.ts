@@ -223,6 +223,52 @@ test('declining to connect shows a message and keeps the connect step; trying ag
   expect(await store(page, s => s.calls.filter(c => c.method === 'connect').length)).toBe(2);
 });
 
+test('connecting, then a failed subscribe: the connect step comes back with the reason, and trying again works', async ({ page }) => {
+  await page.goto('dev.html?connected=0');
+  await store(page, s => s.failNext('subscribe'));
+  await page.getByRole('button', { name: 'Connect to Trello' }).click();
+  await expect(page.getByTestId('connect-error')).toContainText("Couldn't load the board. Simulated failure");
+  await expect(page.getByTestId('stage')).toHaveCount(0);
+  expect(await store(page, s => s.subscriberCount())).toBe(0);
+  await page.getByRole('button', { name: 'Connect to Trello' }).click();
+  await expect(card(page, 'c1')).toBeVisible();
+  expect(await store(page, s => s.subscriberCount())).toBe(1);
+});
+
+// ---- a failure to load at startup ----
+
+for (const method of ['isConnected', 'load', 'subscribe'] as const) {
+  test(`a failed ${method} at startup shows an error screen; Try again loads the matrix and nothing of the failed attempt stays live`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.goto('dev.html?focus=c1');                                           // a focus zooms in, so the view differs from the one saved
+    await expect(card(page, 'c1')).toBeVisible();
+    await expect.poll(() => savedView(page)).not.toBeNull();                         // the first mount has saved its view
+    await page.evaluate(key => { sessionStorage.setItem(key, '"sentinel"'); }, VIEW_KEY);   // a save from the failed attempt would replace this
+    await page.evaluate(m => (window as unknown as { __store: { failNext(m: string): void } }).__store.failNext(m), method);
+    await page.evaluate(() => (window as unknown as { __remount(): Promise<void> }).__remount());   // the old matrix goes, a new mount is tried
+
+    const screen = page.getByTestId('load-error');
+    await expect(screen).toContainText("Couldn't load the board. Simulated failure");
+    await expect(page.getByTestId('toolbar')).toHaveCount(0);
+    await expect(page.getByTestId('stage')).toHaveCount(0);
+    await page.evaluate(() => { (window as unknown as { __renderMs: unknown }).__renderMs = { last: -1, p95: -1 }; });   // a leftover render would replace this
+    await store(page, s => s.remote(snap => { snap.cards[0]!.name = 'Renamed by the other person'; }));   // nothing is listening, nothing throws
+    await page.waitForTimeout(900);                                                  // longer than the view's save delay
+    expect(await page.evaluate(key => sessionStorage.getItem(key), VIEW_KEY)).toBe('"sentinel"');
+    expect(await page.evaluate(() => (window as unknown as { __renderMs: unknown }).__renderMs)).toEqual({ last: -1, p95: -1 });
+    expect(await store(page, s => s.subscriberCount())).toBe(0);
+    await expect(screen).toBeVisible();
+
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await expect(card(page, 'c1')).toBeVisible();
+    await expect(page.getByTestId('toolbar')).toBeVisible();
+    await expect(screen).toHaveCount(0);
+    expect(await store(page, s => s.subscriberCount())).toBe(1);
+    expect(errors).toEqual([]);
+  });
+}
+
 // ---- read-only ----
 
 test('read-only: cards cannot be dragged, clicks still open cards, the view still works', async ({ page }) => {

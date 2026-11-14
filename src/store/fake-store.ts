@@ -11,6 +11,8 @@ export interface FakeStore extends BoardStore {
   failNext(method: keyof BoardStore, error?: StoreError): void;
   remote(mutate: (snap: BoardSnapshot) => void): void;        // simulates the other person; notifies subscribers
   snapshot(): BoardSnapshot;                                  // current state, a deep copy
+  /** How many subscriptions are live now (a view that has gone away must have left none). */
+  subscriberCount(): number;
 }
 
 const invalid = (message: string) => new StoreError('invalid', message);
@@ -108,6 +110,7 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
       for (const notify of [...subscribers]) notify(copy());
     },
     snapshot: copy,
+    subscriberCount: () => subscribers.size,
 
     async isConnected() { checkFailure('isConnected'); return connected; },
     async connect() { enter('connect', []); connected = true; },

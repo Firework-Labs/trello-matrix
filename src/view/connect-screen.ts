@@ -20,6 +20,23 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
   return e;
 }
 
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** Shown instead of the matrix when the board could not be read at startup: what went wrong, and a button that tries the whole start again. */
+export function createLoadErrorScreen(error: unknown, tryAgain: () => void, signal: AbortSignal): ConnectScreen {
+  const screen = el('div', 'mm-connect');
+  screen.dataset.testid = 'load-error';
+  const panel = el('div', 'mm-connect-panel');
+  const message = el('p', 'mm-connect-error', `Couldn't load the board. ${messageOf(error)}`);
+  message.setAttribute('role', 'alert');
+  const button = el('button', 'mm-primary', 'Try again');
+  button.type = 'button';
+  button.addEventListener('click', () => { button.disabled = true; tryAgain(); }, { signal });
+  panel.append(message, button);
+  screen.append(panel);
+  return { el: screen };
+}
+
 export function createConnectScreen(handlers: ConnectHandlers, signal: AbortSignal): ConnectScreen {
   const screen = el('div', 'mm-connect');
   screen.dataset.testid = 'connect';
@@ -54,7 +71,7 @@ export function createConnectScreen(handlers: ConnectHandlers, signal: AbortSign
     button.disabled = true;
     message.hidden = true;
     asked.then(
-      () => handlers.onConnected().catch(error => fail(`Couldn't load the board. ${error instanceof Error ? error.message : String(error)}`)),
+      () => handlers.onConnected().catch(error => fail(`Couldn't load the board. ${messageOf(error)}`)),
       () => fail(DECLINED_TEXT),
     );
   }, { signal });

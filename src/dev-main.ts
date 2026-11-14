@@ -17,7 +17,7 @@ import { mountMatrix } from './view/app';
 
 interface RenderStats { last: number; p95: number }
 declare global {
-  interface Window { __store: FakeStore; __renderMs: RenderStats }
+  interface Window { __store: FakeStore; __renderMs: RenderStats; __remount(): Promise<void> }
 }
 
 /** Where the dev page keeps the person's saved view, so it survives a reload (the fake store itself does not). */
@@ -93,9 +93,16 @@ function recordRender(ms: number): void {
   window.__renderMs = { last: ms, p95: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? ms };
 }
 
-void (async () => {
-  if (view) await fakeSaveView(view);
-  await mountMatrix(document.getElementById('app')!, devStore, {
+let mounted: { destroy(): void } | null = null;
+async function mount(): Promise<void> {
+  mounted = await mountMatrix(document.getElementById('app')!, devStore, {
     onRenderTime: recordRender, canRenameLevels: query.get('renameLevels') !== '0', focusCardId: query.get('focus') ?? undefined,
   });
+}
+/** For the browser tests: take the matrix down and mount it again on the same store (with a failure queued, to see the load error). */
+window.__remount = async () => { mounted?.destroy(); mounted = null; await mount(); };
+
+void (async () => {
+  if (view) await fakeSaveView(view);
+  await mount();
 })();

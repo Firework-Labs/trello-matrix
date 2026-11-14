@@ -1,7 +1,7 @@
 import { locate } from '../model/placement';
 import type { BoardSnapshot, Card, ColourBy, ParamId, Parameter, ViewSettings } from '../model/types';
 import type { BoardStore } from '../store/board-store';
-import { createConnectScreen } from './connect-screen';
+import { createConnectScreen, createLoadErrorScreen } from './connect-screen';
 import { attachDrag } from './drag';
 import { createLegend } from './legend';
 import { createParameterDialog } from './parameter-dialog';
@@ -83,8 +83,37 @@ function cardsInLists(snap: BoardSnapshot, listIds: string[]): Card[] {
   return snap.cards.filter(c => chosen.has(c.idList));
 }
 
-/** Mounts the matrix, after the one-time "Connect to Trello" step when this person has not connected yet. */
+/**
+ * Mounts the matrix, after the one-time "Connect to Trello" step when this person has not connected yet.
+ * It does not reject: when the board cannot be read at startup, a screen says so, with a "Try again" button that
+ * starts the whole mount again. Whatever the failed attempt set up is gone before the screen appears.
+ */
 export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: MatrixOptions = {}): Promise<{ destroy(): void }> {
+  const abort = new AbortController();
+  let mounted: { destroy(): void } | null = null;
+
+  async function attempt(): Promise<void> {
+    try {
+      const next = await mountStart(root, store, opts);
+      if (abort.signal.aborted) next.destroy(); else mounted = next;
+    } catch (error) {
+      if (abort.signal.aborted) return;
+      root.replaceChildren(createLoadErrorScreen(error, () => { void attempt(); }, abort.signal).el);
+    }
+  }
+  await attempt();
+  return {
+    destroy() {
+      abort.abort();
+      mounted?.destroy();
+      mounted = null;
+      root.replaceChildren();
+    },
+  };
+}
+
+/** One attempt: the connect step if needed, otherwise the board. Rejects when the board cannot be read. */
+async function mountStart(root: HTMLElement, store: BoardStore, opts: MatrixOptions): Promise<{ destroy(): void }> {
   if (await store.isConnected()) return mountBoard(root, store, opts);
 
   const abort = new AbortController();
@@ -92,7 +121,13 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
   const screen = createConnectScreen({
     connect: () => store.connect(),
     async onConnected() {
-      const mounted = await mountBoard(root, store, opts);          // replaces the connect screen
+      let mounted: { destroy(): void };
+      try {
+        mounted = await mountBoard(root, store, opts);              // replaces the connect screen
+      } catch (error) {
+        if (!abort.signal.aborted) root.replaceChildren(screen.el);  // a failed attempt cleans up after itself; the connect screen shows what went wrong
+        throw error;
+      }
       if (abort.signal.aborted) mounted.destroy(); else board = mounted;
     },
   }, abort.signal);
@@ -412,32 +447,44 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
     state.vp = { zoom: FOCUS_ZOOM, panX: s.w / 2 - at.x! * s.w * FOCUS_ZOOM, panY: s.h / 2 - (1 - at.y!) * s.h * FOCUS_ZOOM };
     return false;
   }
+  let highlightTimer = 0;
+  /** Takes everything the view set up away: listeners, observer, timers, the matrix itself. Writes nothing. */
+  function release(): void {
+    abort.abort();
+    clearTimeout(highlightTimer);
+    clearTimeout(saveTimer);
+    saveTimer = 0;
+    resizeObserver.disconnect();
+    cancelAnimationFrame(frame);
+    clearTimeout(animationTimer);
+    hideToast();
+    surface.destroy();
+    root.replaceChildren();
+    root.classList.remove('mm-app');
+  }
   const highlightFocus = opts.focusCardId !== undefined && focusOn(opts.focusCardId);
 
   state.vp = clampPan(state.vp, surface.size());     // a saved pan from a different window size
   syncToolbar();
   renderNow();
-  let highlightTimer = 0;
   if (highlightFocus) {
     surface.highlight(opts.focusCardId!);
     highlightTimer = window.setTimeout(() => surface.highlight(null), HIGHLIGHT_MS);
   }
-  const unsubscribe = store.subscribe(boardChangedByStore);
+  let unsubscribe: () => void;
+  try {
+    unsubscribe = store.subscribe(boardChangedByStore);
+  } catch (error) {
+    release();                                       // the attempt has failed: nothing it set up may stay live, and nothing is saved
+    throw error;
+  }
   if (snapshot.canEdit && snapshot.parameters.length < 2) dialog.open(state.snapshot);   // nothing can be plotted without them
 
   return {
     destroy() {
-      abort.abort();
       unsubscribe();
-      clearTimeout(highlightTimer);
-      resizeObserver.disconnect();
-      cancelAnimationFrame(frame);
-      clearTimeout(animationTimer);
-      if (saveTimer) void saveNow();
-      hideToast();
-      surface.destroy();
-      root.replaceChildren();
-      root.classList.remove('mm-app');
+      if (saveTimer) void saveNow();               // a change in the last half second is not lost
+      release();
     },
   };
 }
