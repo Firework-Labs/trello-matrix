@@ -1,7 +1,8 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import { resolve } from 'node:path';
 
 export default defineConfig({
+  test: { include: ['tests/**/*.test.ts'] },   // e2e/*.spec.ts belongs to Playwright
   base: process.env.VITE_BASE ?? '/trello-matrix/',
   build: {
     rollupOptions: {
