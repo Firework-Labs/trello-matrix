@@ -1,0 +1,87 @@
+import { APP_KEY, APP_NAME } from '../config';
+import { checks, p3AfterReload, p4Closed, p4Survived, writeCheckIds, writePing } from './checks';
+import type { CheckDeps, CheckResult } from './checks';
+
+const t = TrelloPowerUp.iframe({ appKey: APP_KEY, appName: APP_NAME });
+const deps: CheckDeps = { t, fetch: (...args) => window.fetch(...args), key: APP_KEY, now: () => Date.now() };
+
+const results = new Map<string, CheckResult>();
+const writeButtons: HTMLButtonElement[] = [];
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+
+const resultsBody = el('tbody');
+
+function show(result: CheckResult) {
+  results.set(result.id, result);
+  resultsBody.replaceChildren(
+    ...[...results.values()].sort((a, b) => a.id.localeCompare(b.id)).map(r =>
+      el('tr', {}, el('td', {}, r.id), el('td', {}, r.title), el('td', { className: r.status }, r.status),
+        el('td', {}, r.detail), el('td', {}, r.ms === undefined ? '' : String(r.ms)))),
+  );
+}
+
+const testBoard = el('input', { type: 'checkbox', id: 'testboard' });
+testBoard.addEventListener('change', () => { for (const b of writeButtons) b.disabled = !testBoard.checked; });
+
+function runButton(id: string, run: () => Promise<void>, writes: boolean) {
+  const button = el('button', { textContent: 'Run' });
+  button.disabled = writes;
+  if (writes) writeButtons.push(button);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try { await run(); } finally { button.disabled = writes && !testBoard.checked; }
+  });
+  return button;
+}
+
+const checkRows = checks.map(c => {
+  const actions: HTMLElement[] = [runButton(c.id, async () => {
+    show({ id: c.id, title: c.title, status: 'manual', detail: 'Running…' });
+    show(await c.run(deps));
+  }, writeCheckIds.includes(c.id))];
+  if (c.id === 'P2') {
+    const ping = el('button', { textContent: 'Write ping' });
+    ping.disabled = true;
+    writeButtons.push(ping);
+    ping.addEventListener('click', async () => {
+      try { await writePing(deps); ping.textContent = 'Ping written'; } catch (e) { ping.textContent = `Failed: ${e instanceof Error ? e.message : String(e)}`; }
+    });
+    actions.push(ping);
+  }
+  const note = c.needsClick ? ' (press this yourself)' : '';
+  return el('tr', {}, el('td', {}, c.id), el('td', {}, c.title, el('span', { className: 'note', textContent: note })), el('td', {}, ...actions));
+});
+
+const copyBox = el('textarea', { readOnly: true, hidden: true });
+const copyButton = el('button', { textContent: 'Copy results' });
+copyButton.addEventListener('click', async () => {
+  // The results never contain the REST token; nothing here reads it.
+  const json = JSON.stringify({ browser: navigator.userAgent, at: new Date().toISOString(), results: [...results.values()] }, null, 2);
+  copyBox.value = json;
+  copyBox.hidden = false;
+  copyBox.select();
+  try { await navigator.clipboard.writeText(json); copyButton.textContent = 'Copied'; } catch { copyButton.textContent = 'Copy failed: select the text below and copy it'; }
+});
+
+document.getElementById('app')!.append(
+  el('h1', {}, 'Matrix checks'),
+  el('p', {}, 'These checks find out what Trello allows. Follow the script you were sent. Nothing here is kept.'),
+  el('label', {}, testBoard, ' This is a test board'),
+  el('p', { className: 'note' }, 'The checks that write to the board stay switched off until you tick the box.'),
+  el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Check'), el('th', {}, 'What it finds out'), el('th', {}, ''))), el('tbody', {}, ...checkRows)),
+  el('h2', {}, 'Results'),
+  el('table', {}, el('thead', {}, el('tr', {}, ...['Check', 'Title', 'Result', 'Detail', 'ms'].map(h => el('th', {}, h)))), resultsBody),
+  copyButton,
+  copyBox,
+);
+
+// Things that happen on their own: after a reload (P3, P4) and when focus returns (P4).
+const closed = p4Closed();
+if (closed) show(closed);
+void p3AfterReload(deps).then(r => { if (r) show(r); });
+window.addEventListener('focus', () => { const r = p4Survived(); if (r) show(r); });
