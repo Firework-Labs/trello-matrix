@@ -8,6 +8,8 @@ export interface Pacer { run<T>(fn: () => Promise<T>): Promise<T> }
 export function createPacer(o: {
   maxPerWindow: number; windowMs: number; now: () => number; sleep: (ms: number) => Promise<void>;
 }): Pacer {
+  if (!(Number.isFinite(o.maxPerWindow) && o.maxPerWindow >= 1)) throw new RangeError(`maxPerWindow must be a finite number of at least 1, got ${o.maxPerWindow}`);
+  if (!(Number.isFinite(o.windowMs) && o.windowMs > 0)) throw new RangeError(`windowMs must be a finite number above 0, got ${o.windowMs}`);
   const recentStarts: number[] = [];   // ascending start times still inside the window
   let previous: Promise<unknown> = Promise.resolve();
 

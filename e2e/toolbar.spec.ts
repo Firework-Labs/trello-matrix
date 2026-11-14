@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { store, wheelZoom } from './helpers';
+import { centreOf, store, wheelZoom } from './helpers';
 
 const VIEW_KEY = 'trello-matrix-dev-view';       // where the dev page keeps the saved view
 
@@ -198,4 +198,35 @@ test('a long title is cut off in a chip and shown in full on hover', async ({ pa
   await expect(title).toHaveCSS('text-overflow', 'ellipsis');
   await expect(title).toHaveCSS('white-space', 'nowrap');
   expect(await title.evaluate(e => e.scrollWidth > e.clientWidth)).toBe(true);        // really cut off
+});
+
+test('a view save that keeps failing shows its toast once, and again only after a save has worked', async ({ page }) => {
+  await page.goto('dev.html');
+  await page.evaluate(() => {
+    const w = window as unknown as { __store: { saveView(v: unknown): Promise<void> }; __saves: { ok: boolean }[]; __toasts: number; __saveWorks: boolean };
+    w.__saves = []; w.__toasts = 0; w.__saveWorks = false;
+    w.__store.saveView = async () => { w.__saves.push({ ok: w.__saveWorks }); if (!w.__saveWorks) throw new Error('offline'); };
+    // Every showToast replaces the toast's text, so each one is a change to it, even with the same words.
+    new MutationObserver(records => {
+      for (const r of records) if ((r.target as HTMLElement).dataset?.testid === 'toast') w.__toasts++;
+    }).observe(document.body, { subtree: true, childList: true });
+  });
+  const saves = () => page.evaluate(() => (window as unknown as { __saves: unknown[] }).__saves.length);
+  const toasts = () => page.evaluate(() => (window as unknown as { __toasts: number }).__toasts);
+  const zoomOnce = async (n: number) => {
+    await wheelZoom(page, 1);
+    await expect.poll(saves).toBe(n);                                               // the view's save was tried
+  };
+  const at = await centreOf(page, '[data-testid="stage"]');
+  await page.mouse.move(at.x, at.y);
+  for (const n of [1, 2, 3]) await zoomOnce(n);                                      // three saves in a row fail
+  await expect(page.getByTestId('toast')).toContainText("Couldn't save your view. offline");
+  expect(await toasts()).toBe(1);
+
+  await page.evaluate(() => { (window as unknown as { __saveWorks: boolean }).__saveWorks = true; });
+  await zoomOnce(4);                                                                 // this one works
+  expect(await toasts()).toBe(1);
+  await page.evaluate(() => { (window as unknown as { __saveWorks: boolean }).__saveWorks = false; });
+  await zoomOnce(5);                                                                 // a later failure may tell the person again
+  await expect.poll(toasts).toBe(2);
 });

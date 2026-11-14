@@ -250,6 +250,7 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
   }
   let savedJson = JSON.stringify(currentView());     // what the store is known to hold
   let saveTimer = 0;
+  let saveFailed = false;                            // the last save failed and the person has been told
   function queueSave(): void {
     if (saveTimer || JSON.stringify(currentView()) === savedJson) return;
     saveTimer = window.setTimeout(saveNow, SAVE_EVERY_MS);
@@ -263,9 +264,11 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
     savedJson = json;
     try {
       await store.saveView(view);
+      saveFailed = false;
     } catch (error) {
       savedJson = '';                                // the next change tries again
-      showToast(`Couldn't save your view. ${error instanceof Error ? error.message : String(error)}`, 'error');
+      if (!saveFailed) showToast(`Couldn't save your view. ${error instanceof Error ? error.message : String(error)}`, 'error');
+      saveFailed = true;                             // quiet until a save works, so a failure that stays does not toast on every render
     }
   }
   // A change in the last half second would otherwise be lost when the page or the matrix goes away.

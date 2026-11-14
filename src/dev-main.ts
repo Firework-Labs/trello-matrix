@@ -77,7 +77,7 @@ const fakeSaveView = store.saveView;
 const devStore: FakeStore = Object.create(store, {
   saveView: {
     async value(next: ViewSettings) {
-      await fakeSaveView(next);
+      await store.saveView(next);                     // looked up now, so a test can replace it on window.__store
       sessionStorage.setItem(VIEW_KEY, JSON.stringify(next));
     },
   },

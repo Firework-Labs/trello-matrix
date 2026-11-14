@@ -294,9 +294,12 @@ test('a removed parameter whose re-read fails stays removed: Reload takes it off
 test('a rename whose re-read fails keeps the new name; Reload brings the matrix along', async ({ page }) => {
   await page.goto('dev.html'); await page.getByTestId('params').click();
   const d = dialog(page); const name = row(page, 'f-value').getByTestId('param-name');
+  await d.getByLabel('Name').fill('Risk');                                                // a valid new name waits in the form
+  await expect(d.getByRole('button', { name: 'Add parameter' })).toBeEnabled();
   await failLoadOnce(page);
   await name.fill('Benefit'); await name.press('Enter');
   await expect(d.getByTestId('param-error')).toHaveText(RELOAD_MESSAGE);
+  await expect(d.getByRole('button', { name: 'Add parameter' })).toBeDisabled();          // the board is unread: nothing can be added until Reload works
   await expect(name).toHaveValue('Benefit');                                              // the store holds it: it is not put back
   await expect(page.getByTestId('up').locator('option[value="f-value"]')).toHaveText('Value');
   await d.getByRole('button', { name: 'Reload' }).click();
@@ -304,6 +307,7 @@ test('a rename whose re-read fails keeps the new name; Reload brings the matrix 
   await expect(name).toHaveValue('Benefit');
   await expect(page.getByTestId('up').locator('option[value="f-value"]')).toHaveText('Benefit');
   expect(await store(page, s => s.calls.filter(c => c.method === 'renameParameter').length)).toBe(1);
+  await expect(d.getByRole('button', { name: 'Add parameter' })).toBeEnabled();                // and it can again once the board has been read
 });
 
 test('a failed re-read can be retried with Reload until it works', async ({ page }) => {

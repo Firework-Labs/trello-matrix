@@ -231,7 +231,7 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     formNote.textContent = note;
     formNote.hidden = note === '';
     addButton.textContent = linking ? 'Link' : 'Add parameter';
-    addButton.disabled = !valid || busy > 0;
+    addButton.disabled = !valid || busy > 0 || unread;
   }
 
   for (const input of [nameInput, ...levelInputs.map(l => l.input)]) input.addEventListener('input', () => { clearError(); updateForm(); }, { signal });

@@ -79,7 +79,7 @@ copyButton.addEventListener('click', async () => {
 
 document.getElementById('app')!.append(
   el('h1', {}, 'Matrix checks'),
-  el('p', {}, 'These checks find out what Trello allows. Follow the script you were sent. Nothing here is kept.'),
+  el('p', {}, 'These checks find out what Trello allows. Follow the script you were sent. The results stay in this browser tab until it is closed, and are sent nowhere.'),
   el('label', {}, testBoard, ' This is a test board'),
   el('p', { className: 'note' }, 'The checks that write to the board stay switched off until you tick the box.'),
   el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Check'), el('th', {}, 'What it finds out'), el('th', {}, ''))), el('tbody', {}, ...checkRows)),
