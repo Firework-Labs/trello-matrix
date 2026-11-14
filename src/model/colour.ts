@@ -1,6 +1,6 @@
 import type { BoardSnapshot, Card, ColourBy } from './types';
 
-/** The grey for a card with no value (and for Trello's 'black' label, which is the same hue). */
+/** The grey for a card with no value. No label colour is drawn in it (Trello's 'black' is a darker grey), so "no label" never looks like a label. */
 export const NONE_COLOUR = '#8590a2';
 
 /** Ten distinct colours for lists and members, given out in board order and wrapping after ten. */
@@ -9,7 +9,10 @@ export const PALETTE: string[] = [
   '#579dff', '#60c6d2', '#94c748', '#e774bb', '#1d7f8c',
 ];
 
-/** Atlassian's published label colours: each base name with plain, _dark and _light shades. */
+/**
+ * Each of Trello's label colour names with plain, _dark and _light shades. The plain names follow Trello's label
+ * colours; the light and dark shades are approximations.
+ */
 const TRELLO_HEX = new Map(Object.entries({
   green: '#4bce97', green_dark: '#216e4e', green_light: '#d3f1a7',
   yellow: '#e2b203', yellow_dark: '#946f00', yellow_light: '#f8e6a0',
@@ -20,7 +23,7 @@ const TRELLO_HEX = new Map(Object.entries({
   sky: '#60c6d2', sky_dark: '#206a83', sky_light: '#c6edfb',
   lime: '#94c748', lime_dark: '#4c6b1f', lime_light: '#e2f7c6',
   pink: '#e774bb', pink_dark: '#943d73', pink_light: '#fdd0ec',
-  black: '#8590a2', black_dark: '#44546f', black_light: '#dfe1e6',
+  black: '#626f86', black_dark: '#44546f', black_light: '#dfe1e6',
 }));
 
 /** A Trello label or option colour name to its hex. Unknown or null (including 'none') is the grey. */

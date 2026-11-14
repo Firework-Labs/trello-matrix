@@ -13,6 +13,15 @@ test('whole matrix shows dots, sections with counts, and the do-first corner', a
   expect(total).toBeGreaterThan(20);
 });
 
+test('a section with one card says "1 card", every other count says "N cards"', async ({ page }) => {
+  await page.goto('dev.html?cards=4&lists=l-backlog');                                   // the four fixture cards only
+  await expect(page.locator('[data-section]')).toHaveCount(9);
+  const texts = await page.locator('[data-section] .count').allTextContents();
+  expect(texts).toContain('1 card');
+  expect(texts).toContain('0 cards');
+  for (const text of texts) expect(text).toMatch(/^(1 card|(?!1 )\d+ cards)$/);
+});
+
 test('c1 sits in the best section, the axes read worst to best, and the zoom label starts at 100%', async ({ page }) => {
   await page.goto('dev.html');
   await expect(page.locator('[data-section="2-2"] .count')).toHaveText(/\d+ cards/);

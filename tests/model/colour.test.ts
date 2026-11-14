@@ -21,6 +21,14 @@ test('every Trello colour name maps to a hex', () => {
     for (const suffix of ['', '_dark', '_light']) expect(trelloColour(base + suffix)).toMatch(/^#[0-9a-f]{6}$/);
   expect(trelloColour('nope')).toBe(NONE_COLOUR); expect(trelloColour(null)).toBe(NONE_COLOUR);
 });
+test('no label colour name draws as the grey for "no value", and black sits between its dark and light shades', () => {
+  const names = ['green', 'yellow', 'orange', 'red', 'purple', 'blue', 'sky', 'lime', 'pink', 'black'].flatMap(b => [b, b + '_dark', b + '_light']);
+  for (const name of names) expect(trelloColour(name), name).not.toBe(NONE_COLOUR);
+  const brightness = (hex: string) => parseInt(hex.slice(1, 3), 16) + parseInt(hex.slice(3, 5), 16) + parseInt(hex.slice(5, 7), 16);
+  expect(brightness(trelloColour('black_dark'))).toBeLessThan(brightness(trelloColour('black')));
+  expect(brightness(trelloColour('black'))).toBeLessThan(brightness(NONE_COLOUR));          // clearly darker than the grey for "no label"
+  expect(brightness(trelloColour('black_light'))).toBeGreaterThan(brightness(trelloColour('black')));
+});
 test('dark and light shades differ from the plain colour', () => {
   for (const base of ['green', 'red', 'blue', 'black']) {
     expect(trelloColour(base + '_dark')).not.toBe(trelloColour(base));

@@ -157,11 +157,21 @@ export function createToolbar(handlers: ToolbarHandlers, signal: AbortSignal): T
 
   // ---- axis and colour selects ----
 
+  /** What decides the options of each select: they are rebuilt only when this changes, so an open dropdown is left alone. */
+  const optionKeys = new Map<HTMLSelectElement, string>();
+  function fillOptions(select: HTMLSelectElement, key: string, build: () => HTMLOptionElement[]): void {
+    if (optionKeys.get(select) === key) return;
+    optionKeys.set(select, key);
+    select.replaceChildren(...build());
+  }
+
   function fillAxis(select: HTMLSelectElement, parameters: Parameter[], value: ParamId | null, other: ParamId | null): void {
     // The parameter on the other axis cannot be picked here, so the two can never be the same.
-    const options = parameters.map(p => option(p.id, p.name, p.id === other));
-    if (value === null) options.unshift(option(NO_CHOICE, '—', true));
-    select.replaceChildren(...options);
+    fillOptions(select, JSON.stringify([parameters.map(p => [p.id, p.name]), other, value === null]), () => {
+      const options = parameters.map(p => option(p.id, p.name, p.id === other));
+      if (value === null) options.unshift(option(NO_CHOICE, '—', true));
+      return options;
+    });
     select.value = value ?? NO_CHOICE;
   }
 
@@ -179,10 +189,10 @@ export function createToolbar(handlers: ToolbarHandlers, signal: AbortSignal): T
     fillAxis(up, model.parameters, model.up, model.across);
     swap.disabled = model.across === null || model.up === null;
     updateLists(model.lists, model.listIds);
-    colourBy.replaceChildren(
+    fillOptions(colourBy, JSON.stringify(model.dropdownFields.map(f => [f.id, f.name])), () => [
       option('label', 'Label'), option('list', 'List'), option('member', 'Member'),
       ...model.dropdownFields.map(f => option(`field:${f.id}`, f.name)),
-    );
+    ]);
     colourBy.value = encodeColour(model.colourBy);
     showImages.checked = model.showImages;
     resequence.disabled = !model.canResequence;

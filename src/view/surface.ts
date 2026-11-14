@@ -86,6 +86,9 @@ interface CardView {
 
 interface AxisLabel { el: HTMLElement; shown: string }
 
+/** "1 card", "0 cards", "12 cards". */
+const cardCount = (n: number): string => `${n} card${n === 1 ? '' : 's'}`;
+
 export function createSurface(host: HTMLElement, options: SurfaceOptions = {}): Surface {
   const tray = el('aside', 'mm-tray');
   tray.dataset.testid = 'tray';
@@ -272,7 +275,7 @@ export function createSurface(host: HTMLElement, options: SurfaceOptions = {}): 
     trayHeading.textContent = `Not placed yet (${trayCount})`;
 
     rebuildGrid(across, up);
-    sections.forEach((s, k) => { s.querySelector('.count')!.textContent = `${counts.get(k) ?? 0} cards`; });
+    sections.forEach((s, k) => { s.querySelector('.count')!.textContent = cardCount(counts.get(k) ?? 0); });
   }
 
   /** Every card that is not lifted goes in its zone's element; the tray keeps board order. */

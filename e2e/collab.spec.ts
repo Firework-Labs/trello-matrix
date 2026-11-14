@@ -177,6 +177,31 @@ test('choosing lists after a focus makes the choice the person own', async ({ pa
   await expect.poll(async () => (await savedView(page))?.listIds).toEqual(['l-backlog', 'l-doing']);
 });
 
+test('a list added only by "Show on matrix" is not part of a resequence: not previewed, never sent', async ({ page }) => {
+  await page.goto('dev.html');
+  const target = await store(page, s => s.snapshot().cards.find(c => c.idList === 'l-doing')!.id);
+  await page.goto(`dev.html?focus=${target}`);
+  await expect(page.getByTestId('lists')).toHaveText('Lists (3)…');                    // Doing is plotted for this session
+  await expect(card(page, target)).toBeVisible();
+  await page.getByTestId('resequence').click();
+  const drawer = page.getByTestId('reseq-drawer');
+  await expect(drawer.locator('h4')).toHaveText([/^Backlog \(\d+ cards\)$/, /^New Feature ideas \(\d+ cards\)$/]);
+  await expect(drawer).not.toContainText('Doing');
+  await drawer.getByRole('button', { name: 'Reorder in Trello' }).click();
+  await expect(page.getByTestId('toast')).toContainText('reordered.');
+  const sent = await store(page, s => s.calls.filter(c => c.method === 'reorderLists').flatMap(c => (c.args[0] as { listId: string }[]).map(o => o.listId)));
+  expect(sent.length).toBeGreaterThan(0);
+  expect(sent).not.toContain('l-doing');
+});
+
+test('with no list chosen but one added by "Show on matrix", there is nothing to resequence', async ({ page }) => {
+  await page.goto('dev.html');
+  const target = await store(page, s => s.snapshot().cards.find(c => c.idList === 'l-doing')!.id);
+  await page.goto(`dev.html?lists=&focus=${target}`);
+  await expect(card(page, target)).toBeVisible();
+  await expect(page.getByTestId('resequence')).toBeDisabled();
+});
+
 for (const [id, zone] of [['c3', 'tray'], ['c2', 'leftStrip']] as const) {
   test(`focus on a card in the ${zone} stays on the whole matrix and highlights it for a moment`, async ({ page }) => {
     await page.goto(`dev.html?focus=${id}`);

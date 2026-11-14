@@ -230,3 +230,22 @@ test('a view save that keeps failing shows its toast once, and again only after 
   await zoomOnce(5);                                                                 // a later failure may tell the person again
   await expect.poll(toasts).toBe(2);
 });
+
+test('an update that changes only a card leaves the axis and colour-by options as they are; a renamed parameter rebuilds them', async ({ page }) => {
+  await page.goto('dev.html');
+  await expect(page.getByTestId('across').locator('option')).toHaveCount(3);
+  const mark = () => page.evaluate(() => {
+    for (const id of ['across', 'up', 'colour-by']) {
+      document.querySelectorAll(`[data-testid="${id}"] option`).forEach(o => { (o as HTMLOptionElement & { __seen?: boolean }).__seen = true; });
+    }
+  });
+  const unmarked = () => page.evaluate(() => ['across', 'up', 'colour-by'].map(id =>
+    [...document.querySelectorAll(`[data-testid="${id}"] option`)].filter(o => !(o as HTMLOptionElement & { __seen?: boolean }).__seen).length));
+  await mark();
+  await store(page, s => s.remote(snap => { snap.cards[0]!.name = 'Renamed by the other person'; }));
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  expect(await unmarked()).toEqual([0, 0, 0]);                                            // the same option elements: an open dropdown is not disturbed
+  await store(page, s => s.remote(snap => { snap.parameters.find(p => p.id === 'f-value')!.name = 'Benefit'; }));
+  await expect(page.getByTestId('up').locator('option[value="f-value"]')).toHaveText('Benefit');
+  expect((await unmarked()).slice(0, 2)).toEqual([3, 3]);                                 // a changed parameter does rebuild the axis lists
+});

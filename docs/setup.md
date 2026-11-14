@@ -67,6 +67,8 @@ Do the checks on a copy, never on the real board.
 3. Still in **Power-Ups**, choose **Custom**, find **Matrix**, and add it.
 4. Check that the board now shows a **Matrix** button at the top right. If the
    variable `PROOF` is `1`, you also see **Matrix checks**.
+   Until the next build stage is deployed, the **Matrix** and **Show on matrix**
+   buttons open an empty page; only **Matrix checks** works. That is expected.
 5. Make sure at least one card on the test board has a **cover image**. (Open a
    card, then **Cover**, then pick or upload a picture.) The image check needs
    one.

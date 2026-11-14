@@ -195,6 +195,9 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
 
   // ---- what is drawn: the matrix, or a hint when there is nothing to plot ----
 
+  /** The lists the person chose in the list picker: the plotted lists without those added only to show one card. */
+  const chosenLists = (): string[] => choice.listIds.filter(id => !sessionLists.has(id));
+
   const parameterOf = (id: ParamId | null): Parameter | undefined => state.snapshot.parameters.find(p => p.id === id);
 
   function plot(): SurfaceState | string {
@@ -209,7 +212,7 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
   function syncToolbar(): void {
     toolbar.update({
       parameters: state.snapshot.parameters, lists: state.snapshot.lists, dropdownFields: state.snapshot.dropdownFields,
-      ...choice, canEdit: state.snapshot.canEdit, canResequence: typeof plot() !== 'string',
+      ...choice, canEdit: state.snapshot.canEdit, canResequence: typeof plot() !== 'string' && chosenLists().length > 0,
     });
   }
 
@@ -246,7 +249,7 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
   // ---- saving the view: at most once per SAVE_EVERY_MS, whatever changed (the zoom and pan included) ----
 
   function currentView(): ViewSettings {
-    return { ...choice, listIds: choice.listIds.filter(id => !sessionLists.has(id)), zoom: state.vp.zoom, panX: state.vp.panX, panY: state.vp.panY };
+    return { ...choice, listIds: chosenLists(), zoom: state.vp.zoom, panX: state.vp.panX, panY: state.vp.panY };
   }
   let savedJson = JSON.stringify(currentView());     // what the store is known to hold
   let saveTimer = 0;
@@ -347,7 +350,9 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
 
   function openResequence(): void {
     if (!state.snapshot.canEdit || choice.across === null || choice.up === null || typeof plot() === 'string') return;
-    drawer.open({ snapshot: state.snapshot, across: choice.across, up: choice.up, listIds: choice.listIds });
+    const listIds = chosenLists();
+    if (listIds.length === 0) return;                // only a list added for one card is plotted: there is nothing of the person's to reorder
+    drawer.open({ snapshot: state.snapshot, across: choice.across, up: choice.up, listIds });
   }
 
   stage.addEventListener('wheel', ev => {
