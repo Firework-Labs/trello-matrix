@@ -1,9 +1,11 @@
-import type { BoardSnapshot, Card, ColourBy, Parameter } from '../model/types';
+import type { BoardSnapshot, Card, ColourBy, ParamId, Parameter, ViewSettings } from '../model/types';
 import type { BoardStore } from '../store/board-store';
 import { attachDrag } from './drag';
-import { createSurface, type Surface } from './surface';
-import { hideToast } from './toast';
-import { clampPan, detailOf, fitSection, zoomAt, type Viewport } from './viewport';
+import { createLegend } from './legend';
+import { createSurface, type Surface, type SurfaceState } from './surface';
+import { createToolbar } from './toolbar';
+import { hideToast, showToast } from './toast';
+import { clampPan, detailOf, fitSection, MAX_ZOOM, MIN_ZOOM, zoomAt, type Viewport } from './viewport';
 import './styles.css';
 
 export interface MatrixOptions {
@@ -13,98 +15,175 @@ export interface MatrixOptions {
   onRenderTime?: (ms: number) => void;
 }
 
+/** The part of the saved view that says what is plotted and how; the zoom and pan live in `AppState.vp`. */
+type Choice = Omit<ViewSettings, 'zoom' | 'panX' | 'panY'>;
+
 /** What the view shows. Later tasks replace `snapshot` on a store update and call `schedule()`. */
 interface AppState {
   snapshot: BoardSnapshot;
-  cards: Card[];                 // the cards in the chosen lists; a new array only when the snapshot changes
-  across: Parameter;
-  up: Parameter;
-  colourBy: ColourBy;
+  cards: Card[];                 // the cards in the chosen lists; a new array only when the snapshot or the lists change
+  choice: Choice;
   vp: Viewport;
 }
 
 const WHOLE: Viewport = { zoom: 1, panX: 0, panY: 0 };
 const ANIMATION_MS = 430;
 const PAN_THRESHOLD = 3;       // px of movement before a press on the background becomes a pan
+const SAVE_EVERY_MS = 500;     // the view is saved at most this often
+const NO_CARDS: Card[] = [];
 
-// Until Task 9 (toolbar, saved view) these are fixed; the query string can pick the axes for tests.
-const CHOSEN_LIST_IDS = ['l-backlog', 'l-ideas'];
-const DEFAULT_ACROSS = 'f-cost';
-const DEFAULT_UP = 'f-value';
+const HINT_NEEDS_PARAMETERS = 'Add at least two parameters to plot cards.';
+const HINT_NEEDS_LISTS = 'Choose the lists to plot.';
+const HINT_NO_CARDS = 'No cards in the chosen lists.';
 
 const DETAIL_TEXT = { dot: 'Whole matrix: dots', chip: 'Closer: titles', full: 'Close up: full cards' };
 
-function initialAxes(snap: BoardSnapshot): { across: Parameter; up: Parameter } | null {
-  const query = new URLSearchParams(location.search);
-  const byId = (id: string) => snap.parameters.find(p => p.id === id);
-  const across = byId(query.get('across') ?? DEFAULT_ACROSS) ?? snap.parameters[0];
-  const up = byId(query.get('up') ?? DEFAULT_UP);
-  const other = up && up !== across ? up : snap.parameters.find(p => p !== across);
-  return across && other ? { across, up: other } : null;
+const finiteOr = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+
+/**
+ * The saved view made to fit this board: a parameter or list that no longer exists is replaced
+ * (the first parameters for the axes) or dropped, and the two axes are never the same parameter.
+ * With nothing saved, Across and Up are the first two parameters and no lists are chosen.
+ */
+function resolveView(saved: ViewSettings | null, snap: BoardSnapshot): { choice: Choice; vp: Viewport } {
+  const across = snap.parameters.find(p => p.id === saved?.across) ?? snap.parameters[0];
+  const up = snap.parameters.find(p => p.id === saved?.up && p !== across) ?? snap.parameters.find(p => p !== across);
+  const chosen = new Set(Array.isArray(saved?.listIds) ? saved.listIds : []);
+  const by = saved?.colourBy;
+  const colourBy: ColourBy = by?.kind === 'list' || by?.kind === 'member' ? { kind: by.kind }
+    : by?.kind === 'field' && snap.dropdownFields.some(f => f.id === by.fieldId) ? { kind: 'field', fieldId: by.fieldId }
+    : { kind: 'label' };
+  return {
+    choice: {
+      across: across?.id ?? null, up: up?.id ?? null,
+      listIds: snap.lists.filter(l => chosen.has(l.id)).map(l => l.id),
+      colourBy, showImages: typeof saved?.showImages === 'boolean' ? saved.showImages : true,
+    },
+    vp: {
+      zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, finiteOr(saved?.zoom, 1))),
+      panX: finiteOr(saved?.panX, 0), panY: finiteOr(saved?.panY, 0),
+    },
+  };
 }
 
-function cardsInChosenLists(snap: BoardSnapshot): Card[] {
-  const known = CHOSEN_LIST_IDS.filter(id => snap.lists.some(l => l.id === id));
-  const chosen = new Set(known.length ? known : snap.lists.map(l => l.id));
+function cardsInLists(snap: BoardSnapshot, listIds: string[]): Card[] {
+  const chosen = new Set(listIds);
   return snap.cards.filter(c => chosen.has(c.idList));
 }
 
 export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: MatrixOptions = {}): Promise<{ destroy(): void }> {
-  const snapshot = await store.load();
+  const [snapshot, saved] = await Promise.all([store.load(), loadSavedView(store)]);
   root.replaceChildren();
   root.classList.add('mm-app');
 
-  const axes = initialAxes(snapshot);
-  if (!axes) {
-    const note = document.createElement('p');
-    note.className = 'mm-note';
-    note.textContent = 'This board needs two parameters before it can show a matrix.';
-    root.append(note);
-    return { destroy() { root.replaceChildren(); root.classList.remove('mm-app'); } };
-  }
+  const resolved = resolveView(saved, snapshot);
+  const choice = resolved.choice;
+  const state: AppState = { snapshot, cards: cardsInLists(snapshot, choice.listIds), choice, vp: resolved.vp };
 
-  const state: AppState = {
-    snapshot, cards: cardsInChosenLists(snapshot), across: axes.across, up: axes.up,
-    colourBy: { kind: 'label' }, vp: WHOLE,
-  };
+  const abort = new AbortController();
+  const { signal } = abort;
 
-  // Toolbar above the stage and the main row below it; later tasks add a legend after the main row.
-  const toolbar = document.createElement('div');
-  toolbar.className = 'mm-toolbar';
-  toolbar.dataset.testid = 'toolbar';
-  const spacer = document.createElement('span');
-  spacer.className = 'mm-spacer';
-  const zoomLabel = document.createElement('span');
-  zoomLabel.className = 'mm-zoom-label';
-  zoomLabel.dataset.testid = 'zoom-label';
-  const wholeButton = document.createElement('button');
-  wholeButton.type = 'button';
-  wholeButton.textContent = 'Whole matrix';
-  wholeButton.dataset.testid = 'whole-matrix';
-  toolbar.append(spacer, zoomLabel, wholeButton);
+  // The toolbar above the stage and the main row below it, then the legend.
+  const toolbar = createToolbar({
+    onAcross(id) { setAxes(id, choice.up); },
+    onUp(id) { setAxes(choice.across, id); },
+    onSwap() { setAxes(choice.up, choice.across); },
+    onLists(listIds) {
+      choice.listIds = listIds;
+      state.cards = cardsInLists(state.snapshot, listIds);       // the zoom stays where it is
+      choiceChanged();
+    },
+    onColourBy(by) { choice.colourBy = by; choiceChanged(); },
+    onShowImages(show) { choice.showImages = show; choiceChanged(); },
+    onParams() { /* the parameter dialog comes with Task 10 */ },
+    onResequence() { /* the resequence dialog comes with Task 11 */ },
+    onWholeMatrix() { animateTo(WHOLE); },
+  }, signal);
+  const legend = createLegend();
   const main = document.createElement('div');
   main.className = 'mm-main';
-  root.append(toolbar, main);
+  root.append(toolbar.el, main, legend.el);
 
   const surface: Surface = createSurface(main);
   const stage = surface.stage;
-  const abort = new AbortController();
-  const { signal } = abort;
+
+  // ---- what is drawn: the matrix, or a hint when there is nothing to plot ----
+
+  const parameterOf = (id: ParamId | null): Parameter | undefined => state.snapshot.parameters.find(p => p.id === id);
+
+  function plot(): SurfaceState | string {
+    const across = parameterOf(choice.across), up = parameterOf(choice.up);
+    if (!across || !up) return HINT_NEEDS_PARAMETERS;
+    if (choice.listIds.length === 0) return HINT_NEEDS_LISTS;
+    if (state.cards.length === 0) return HINT_NO_CARDS;
+    return { snapshot: state.snapshot, cards: state.cards, across, up, colourBy: choice.colourBy, showImages: choice.showImages, vp: state.vp };
+  }
+  let lastPlot: SurfaceState | null = null;
+
+  function syncToolbar(): void {
+    toolbar.update({
+      parameters: state.snapshot.parameters, lists: state.snapshot.lists, dropdownFields: state.snapshot.dropdownFields,
+      ...choice, canResequence: typeof plot() !== 'string',
+    });
+  }
 
   // ---- rendering: batched into one per animation frame ----
 
   let frame = 0;
   function renderNow(): void {
     const started = performance.now();
-    surface.render(state);
-    zoomLabel.textContent = `${DETAIL_TEXT[detailOf(state.vp.zoom)]} · ${Math.round(state.vp.zoom * 100)}%`;
+    const shown = plot();
+    // The legend first: when it appears or wraps it changes the stage's height, and the cards are placed for that height.
+    legend.update(typeof shown === 'string' ? NO_CARDS : state.cards, choice.colourBy, state.snapshot);
+    if (typeof shown === 'string') {
+      surface.showHint(shown);
+    } else {
+      lastPlot = shown;
+      surface.render(shown);
+    }
+    toolbar.setZoomText(`${DETAIL_TEXT[detailOf(state.vp.zoom)]} · ${Math.round(state.vp.zoom * 100)}%`);
     void stage.offsetWidth;                         // include the style and layout work this render caused
+    queueSave();
     opts.onRenderTime?.(performance.now() - started);
   }
   function schedule(): void {
     if (frame) return;
     frame = requestAnimationFrame(() => { frame = 0; renderNow(); });
   }
+
+  /** Lists, colours or images changed: the toolbar follows and the matrix is redrawn, at the same zoom. */
+  function choiceChanged(): void {
+    syncToolbar();
+    renderNow();
+  }
+
+  // ---- saving the view: at most once per SAVE_EVERY_MS, whatever changed (the zoom and pan included) ----
+
+  function currentView(): ViewSettings {
+    return { ...choice, zoom: state.vp.zoom, panX: state.vp.panX, panY: state.vp.panY };
+  }
+  let savedJson = JSON.stringify(currentView());     // what the store is known to hold
+  let saveTimer = 0;
+  function queueSave(): void {
+    if (saveTimer || JSON.stringify(currentView()) === savedJson) return;
+    saveTimer = window.setTimeout(saveNow, SAVE_EVERY_MS);
+  }
+  async function saveNow(): Promise<void> {
+    clearTimeout(saveTimer);
+    saveTimer = 0;
+    const view = currentView();
+    const json = JSON.stringify(view);
+    if (json === savedJson) return;
+    savedJson = json;
+    try {
+      await store.saveView(view);
+    } catch (error) {
+      savedJson = '';                                // the next change tries again
+      showToast(`Couldn't save your view. ${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+  // A change in the last half second would otherwise be lost when the page or the matrix goes away.
+  window.addEventListener('pagehide', () => { if (saveTimer) void saveNow(); }, { signal });
 
   // ---- zoom and pan ----
 
@@ -121,8 +200,18 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     renderNow();
   }
 
+  /** A new pair of axes: the cards glide to their new places and the view returns to the whole matrix. */
+  function setAxes(across: ParamId | null, up: ParamId | null): void {
+    if (across === null || up === null || across === up) return;
+    choice.across = across;
+    choice.up = up;
+    syncToolbar();
+    animateTo(WHOLE);
+  }
+
   stage.addEventListener('wheel', ev => {
     ev.preventDefault();
+    if (typeof plot() === 'string') return;
     stopAnimation();
     const dy = ev.deltaMode === 1 ? ev.deltaY * 33 : ev.deltaY;
     const at = surface.pointInMatrix(ev.clientX, ev.clientY);
@@ -132,7 +221,7 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
 
   let press: { id: number; x: number; y: number; panX: number; panY: number; panning: boolean } | null = null;
   stage.addEventListener('pointerdown', ev => {
-    if (ev.button !== 0 || (ev.target as Element).closest('[data-card-id]')) return;
+    if (ev.button !== 0 || (ev.target as Element).closest('[data-card-id]') || typeof plot() === 'string') return;
     press = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, panX: state.vp.panX, panY: state.vp.panY, panning: false };
   }, { signal });
   stage.addEventListener('pointermove', ev => {
@@ -161,10 +250,9 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     const section = (ev.target as Element).closest<HTMLElement>('[data-section]');
     if (!section) return;
     const [i = 0, j = 0] = section.dataset.section!.split('-').map(Number);
-    animateTo(fitSection(i, j, state.across.levels.length, state.up.levels.length, surface.size()));
+    const across = parameterOf(choice.across), up = parameterOf(choice.up);
+    if (across && up) animateTo(fitSection(i, j, across.levels.length, up.levels.length, surface.size()));
   }, { signal });
-
-  wholeButton.addEventListener('click', () => animateTo(WHOLE), { signal });
 
   // ---- dragging cards ----
 
@@ -175,10 +263,12 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
     host: main,
     surface,
     store,
-    view: () => state,
+    // Cards can only be dragged while a matrix is drawn; after a drop's writes the view may have changed
+    // (the lists were unchecked, say), and then only the snapshot is read from it.
+    view: () => { const shown = plot(); return typeof shown === 'string' ? lastPlot! : shown; },
     setSnapshot(next) {
       state.snapshot = next;
-      state.cards = cardsInChosenLists(next);
+      state.cards = cardsInLists(next, choice.listIds);
     },
     renderNow,
     onCardClick,
@@ -191,6 +281,8 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
   });
   resizeObserver.observe(stage);
 
+  state.vp = clampPan(state.vp, surface.size());     // a saved pan from a different window size
+  syncToolbar();
   renderNow();
 
   return {
@@ -199,10 +291,21 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
       resizeObserver.disconnect();
       cancelAnimationFrame(frame);
       clearTimeout(animationTimer);
+      if (saveTimer) void saveNow();
       hideToast();
       surface.destroy();
       root.replaceChildren();
       root.classList.remove('mm-app');
     },
   };
+}
+
+/** The saved view, or null when there is none or it cannot be read (the person is told, and starts from the defaults). */
+async function loadSavedView(store: BoardStore): Promise<ViewSettings | null> {
+  try {
+    return await store.loadView();
+  } catch (error) {
+    showToast(`Couldn't load your saved view. ${error instanceof Error ? error.message : String(error)}`, 'error');
+    return null;
+  }
 }

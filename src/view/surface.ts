@@ -3,13 +3,14 @@ import { fieldLevel, locate } from '../model/placement';
 import type { BoardSnapshot, Card, ColourBy, Parameter, Zone } from '../model/types';
 import { detailOf, toScreen, type Detail, type Size, type Viewport } from './viewport';
 
-/** Everything the surface draws. Identity matters: the card model is rebuilt only when one of the first five changes. */
+/** Everything the surface draws. Identity matters: the card model is rebuilt only when one of the first six changes. */
 export interface SurfaceState {
   snapshot: BoardSnapshot;
   cards: Card[];                 // the cards in scope, in board order
   across: Parameter;
   up: Parameter;
   colourBy: ColourBy;
+  showImages: boolean;           // whether a full card makes room for its cover picture
   vp: Viewport;
 }
 
@@ -26,6 +27,8 @@ export interface Surface {
   /** A pointer position in the matrix area's own pixels (the origin that `Viewport` pan is measured from). */
   pointInMatrix(clientX: number, clientY: number): { x: number; y: number };
   render(state: SurfaceState): void;
+  /** Replaces the matrix, strips and tray with a message, and drops every card, until the next `render`. */
+  showHint(text: string): void;
   /** The card as last drawn, or undefined when it is not shown. */
   placementOf(cardId: string): PlacedCard | undefined;
   /** Which drop zone a page position is over (tray, left strip, bottom strip, matrix), or null outside all of them. */
@@ -79,6 +82,9 @@ export function createSurface(host: HTMLElement): Surface {
 
   const stage = el('div', 'mm-stage');
   stage.dataset.testid = 'stage';
+  const hint = el('p', 'mm-hint');
+  hint.dataset.testid = 'empty-hint';
+  hint.hidden = true;
   const clip = el('div', 'mm-clip');
   const area = el('div', 'mm-area');             // the origin of every position; the clip reaches a little past it
   clip.append(area);
@@ -94,7 +100,7 @@ export function createSurface(host: HTMLElement): Surface {
   stripBottom.dataset.testid = 'strip-bottom';
   const acrossAxes = el('div', 'mm-axes mm-axes-across');
   const upAxes = el('div', 'mm-axes mm-axes-up');
-  stage.append(clip, stripLeft, stripBottom, acrossAxes, upAxes);
+  stage.append(clip, stripLeft, stripBottom, acrossAxes, upAxes, hint);
   const dragLayer = el('div', 'mm-drag-layer');
   host.append(tray, stage, dragLayer);
 
@@ -105,9 +111,9 @@ export function createSurface(host: HTMLElement): Surface {
   let acrossLabels: AxisLabel[] = [];
   let upLabels: AxisLabel[] = [];
   let gridKey = '';
-  let last: Pick<SurfaceState, 'snapshot' | 'cards' | 'across' | 'up' | 'colourBy'> | null = null;
+  let last: Pick<SurfaceState, 'snapshot' | 'cards' | 'across' | 'up' | 'colourBy' | 'showImages'> | null = null;
   let shownMatrix = '';
-  let shownRefs: unknown[] = [];                    // the parts of the snapshot that card content is drawn from
+  let shownRefs: unknown[] = [];                    // what card content is drawn from: parts of the snapshot, and whether covers show
   const lifted = new Set<string>();                 // cards in the drag layer; renders do not touch them
   let needsSync = false;                            // a card was released and may be in the wrong parent
   let hot: HTMLElement | null = null;
@@ -131,7 +137,7 @@ export function createSurface(host: HTMLElement): Surface {
     if (detail === 'chip') {
       body.push(el('div', 'mm-title', card.name));
     } else if (detail === 'full') {
-      if (card.hasCover) body.push(el('div', 'mm-cover'));
+      if (card.hasCover && state.showImages) body.push(el('div', 'mm-cover'));
       body.push(el('div', 'mm-title', card.name));
       const pills = state.snapshot.labels.filter(l => card.labelIds.includes(l.id));
       if (pills.length) {
@@ -168,7 +174,7 @@ export function createSurface(host: HTMLElement): Surface {
     const nx = across.levels.length, ny = up.levels.length;
 
     // Full cards draw labels, members, lists and parameters from the snapshot; when those change, every card is redrawn.
-    const refs = [snapshot.labels, snapshot.members, snapshot.lists, snapshot.parameters];
+    const refs = [snapshot.labels, snapshot.members, snapshot.lists, snapshot.parameters, state.showImages];
     const contentChanged = refs.some((r, k) => r !== shownRefs[k]);
     shownRefs = refs;
 
@@ -273,10 +279,11 @@ export function createSurface(host: HTMLElement): Surface {
   }
 
   function render(state: SurfaceState): void {
+    if (!hint.hidden) clearHint();
     if (!last || last.snapshot !== state.snapshot || last.cards !== state.cards || last.across !== state.across
-      || last.up !== state.up || last.colourBy !== state.colourBy) {
+      || last.up !== state.up || last.colourBy !== state.colourBy || last.showImages !== state.showImages) {
       rebuildModel(state);
-      last = { snapshot: state.snapshot, cards: state.cards, across: state.across, up: state.up, colourBy: state.colourBy };
+      last = { snapshot: state.snapshot, cards: state.cards, across: state.across, up: state.up, colourBy: state.colourBy, showImages: state.showImages };
     } else if (needsSync) {
       syncParents();
     }
@@ -318,7 +325,7 @@ export function createSurface(host: HTMLElement): Surface {
         v.el.dataset.detail = detail;
         v.el.style.setProperty('--c', v.colour);
         v.el.setAttribute('aria-label', v.card.name);
-        if (detail === 'dot') v.el.title = v.card.name; else v.el.removeAttribute('title');
+        if (detail === 'full') v.el.removeAttribute('title'); else v.el.title = v.card.name;     // a chip cuts long titles off
         cardContent(v, detail, state);
         shown.detail = detail; shown.zone = v.zone; shown.card = v.card; shown.colour = v.colour;
         shown.left = ''; shown.top = '';                // the zone may have changed which coordinates are set
@@ -342,6 +349,32 @@ export function createSurface(host: HTMLElement): Surface {
     upLabels.forEach((l, j) => {
       placeLabel(l, Math.max(vp.panY + ((ny - 1 - j) / ny) * H, 0), Math.min(vp.panY + ((ny - j) / ny) * H, s.h), 'up');
     });
+  }
+
+  // ---- hint: nothing to plot ----
+
+  function showHint(text: string): void {
+    if (hint.hidden) {
+      for (const v of views.values()) v.el.remove();      // lifted cards too
+      views.clear();
+      lifted.clear();
+      for (const s of sections) s.remove();
+      sections = []; acrossLabels = []; upLabels = [];
+      acrossAxes.replaceChildren(); upAxes.replaceChildren();
+      hot = null;
+      gridKey = ''; last = null; shownRefs = [];
+      trayHeading.textContent = 'Not placed yet (0)';
+      stage.classList.add('mm-empty');
+      tray.hidden = true;
+      hint.hidden = false;
+    }
+    hint.textContent = text;
+  }
+
+  function clearHint(): void {
+    hint.hidden = true;
+    stage.classList.remove('mm-empty');
+    tray.hidden = false;
   }
 
   // ---- dragging: the drag module decides what moves where; the surface owns the elements ----
@@ -416,5 +449,5 @@ export function createSurface(host: HTMLElement): Surface {
     lifted.clear();
   }
 
-  return { stage, size, pointInMatrix, render, placementOf, dropTargetAt, setDropTarget, lift, moveLifted, release, destroy };
+  return { stage, size, pointInMatrix, render, showHint, placementOf, dropTargetAt, setDropTarget, lift, moveLifted, release, destroy };
 }
