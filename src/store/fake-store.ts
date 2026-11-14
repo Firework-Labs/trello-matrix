@@ -15,11 +15,22 @@ export interface FakeStore extends BoardStore {
 
 const invalid = (message: string) => new StoreError('invalid', message);
 
+/** The methods that change the board: after one of these, a store with `staleReads` serves old reads for a while. */
+const WRITES = new Set<keyof BoardStore>([
+  'savePositions', 'setLevel', 'createParameter', 'linkParameter', 'renameParameter', 'renameLevel',
+  'removeParameter', 'reorderLists', 'undoReorder',
+]);
+
 export interface FakeStoreOptions {
   snapshot?: BoardSnapshot;
   connected?: boolean;
   /** The first `reorderLists` with more cards than this writes this many, then rejects once with a network error. */
   reorderFailAfter?: number;
+  /**
+   * Models a store that reads from a cache which lags its own writes: after every write, the next this-many `load()`
+   * calls return the board as it was before that write began. Default 0 (reads are always current).
+   */
+  staleReads?: number;
 }
 
 export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
@@ -32,6 +43,8 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
   const subscribers = new Set<(snap: BoardSnapshot) => void>();
   const failures = new Map<string, StoreError>();
   const calls: FakeStore['calls'] = [];
+  let beforeLatestWrite: BoardSnapshot | null = null;   // the board as it was when the latest write began
+  let staleLoadsLeft = 0;
 
   const copy = () => structuredClone(board);
   /** Throws the failure queued for this method, if any; it fires once. */
@@ -43,6 +56,10 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
   const enter = (method: keyof BoardStore, args: unknown[]) => {
     calls.push({ method, args });
     checkFailure(method);
+    if (WRITES.has(method)) {
+      beforeLatestWrite = copy();
+      staleLoadsLeft = o.staleReads ?? 0;
+    }
   };
 
   const cardNamed = (cardId: string): Card => {
@@ -60,9 +77,11 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
     if (trimmed === '') throw invalid(`${what} needs a name`);
     return trimmed;
   };
+  const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  /** A parameter name must be unique among parameters and among dropdown fields (a field that is not a parameter still holds its name). */
   const checkParameterNameFree = (name: string, exceptId?: ParamId) => {
-    const taken = board.parameters.some(p => p.id !== exceptId && p.name.toLowerCase() === name.toLowerCase());
-    if (taken) throw invalid(`There is already a parameter called ${name}`);
+    if (board.parameters.some(p => p.id !== exceptId && sameName(p.name, name))) throw invalid(`There is already a parameter called ${name}`);
+    if (board.dropdownFields.some(f => f.id !== exceptId && sameName(f.name, name))) throw invalid(`There is already a field called ${name}`);
   };
   /** Levels worst to best from options in field order. */
   const parameterFromField = (field: DropdownField, bestEnd: 'first' | 'last'): Parameter => {
@@ -92,7 +111,11 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
 
     async isConnected() { checkFailure('isConnected'); return connected; },
     async connect() { enter('connect', []); connected = true; },
-    async load() { checkFailure('load'); return copy(); },
+    async load() {
+      checkFailure('load');
+      if (staleLoadsLeft > 0 && beforeLatestWrite) { staleLoadsLeft--; return structuredClone(beforeLatestWrite); }
+      return copy();
+    },
     subscribe(onChange) {
       checkFailure('subscribe');
       subscribers.add(onChange);
@@ -144,7 +167,7 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
       if (!field) throw invalid(`No dropdown field ${fieldId}`);
       if (board.parameters.some(p => p.fieldId === fieldId)) throw invalid(`${field.name} is already a parameter`);
       if (field.options.length < 2 || field.options.length > 3) throw invalid('A parameter has 2 or 3 levels');
-      checkParameterNameFree(field.name);
+      checkParameterNameFree(field.name, field.id);
       const param = parameterFromField(field, bestEnd);
       board.parameters.push(param);
       return structuredClone(param);
@@ -165,6 +188,7 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
       const optionId = param.optionIds[level];
       if (!Number.isInteger(level) || optionId === undefined) throw invalid(`${param.name} has no level ${level}`);
       const clean = cleanName(name, 'A level');
+      if (param.levels.some((l, i) => i !== level && sameName(l, clean))) throw invalid(`Another level is already called ${clean}`);
       param.levels[level] = clean;
       const option = field?.options.find(opt => opt.id === optionId);
       if (option) option.text = clean;

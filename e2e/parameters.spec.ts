@@ -365,3 +365,43 @@ test('while the dialog is open the rest of the page cannot be focused or clicked
   await page.getByTestId('swap').click();
   await expect(page.getByTestId('across')).toHaveValue('f-value');
 });
+
+test('a created parameter that the next read leaves out is still shown, cannot be added again, and is created once', async ({ page }) => {
+  await page.goto('dev.html?staleReads=1'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  await d.getByLabel('Name').fill('Risk');
+  await d.getByRole('button', { name: 'Add parameter' }).click();
+  await expect(row(page, 'f-risk')).toHaveCount(1);                                      // the read was stale, the returned parameter is kept
+  await expect(page.getByTestId('across').locator('option', { hasText: 'Risk' })).toHaveCount(1);
+  await d.getByLabel('Name').fill('Risk');
+  await expect(d.getByTestId('param-note')).toHaveText('A parameter called "Risk" already exists.');
+  await expect(d.getByRole('button', { name: 'Add parameter' })).toBeDisabled();
+  await d.getByLabel('Name').press('Enter');                                             // a submit with the button disabled does nothing
+  expect(await store(page, s => s.calls.filter(c => c.method === 'createParameter').length)).toBe(1);
+  expect(await store(page, s => s.snapshot().dropdownFields.filter(f => f.name === 'Risk').length)).toBe(1);
+});
+
+test('a linked parameter that the next read leaves out is still shown and is linked once', async ({ page }) => {
+  await page.goto('dev.html?staleReads=1&extraField=Effort:S,M,L'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  await d.getByLabel('Name').fill('Effort');
+  await d.getByRole('button', { name: 'Link' }).click();
+  await expect(row(page, 'f-effort')).toHaveCount(1);
+  await d.getByLabel('Name').fill('Effort');
+  await expect(d.getByTestId('param-note')).toHaveText('A parameter called "Effort" already exists.');
+  await expect(d.getByRole('button', { name: /Add parameter|Link/ })).toBeDisabled();
+  expect(await store(page, s => s.calls.filter(c => c.method === 'linkParameter').length)).toBe(1);
+});
+
+test('a level cannot be renamed to a name a sibling level has: the input goes back and nothing is sent', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  const middle = row(page, 'f-value').locator('[data-level="1"]');
+  await middle.fill(' high '); await middle.press('Enter');
+  await expect(d.getByTestId('param-error')).toHaveText('Another level is already called "high".');
+  await expect(middle).toHaveValue('Medium');
+  expect(await store(page, s => s.calls.filter(c => c.method === 'renameLevel').length)).toBe(0);
+  await middle.fill('MEDIUM'); await middle.press('Enter');                              // its own name in other letters is fine
+  await expect(d.getByTestId('param-error')).toBeHidden();
+  expect(await store(page, s => s.calls.filter(c => c.method === 'renameLevel').length)).toBe(1);
+});

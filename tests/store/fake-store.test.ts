@@ -227,6 +227,38 @@ describe('fake store', () => {
     await expect(createFakeStore().createParameter({ name: ' ', levels: ['a', 'b'], bestEnd: 'last' })).rejects.toMatchObject({ kind: 'invalid' });
   });
 
+  test('createParameter rejects a name that an existing dropdown field has, even when that field is not a parameter', async () => {
+    const st = createFakeStore();
+    await st.removeParameter('f-ease');                       // the field stays, so its name is still taken
+    await expect(st.createParameter({ name: ' ease ', levels: ['a', 'b'], bestEnd: 'last' })).rejects.toMatchObject({ kind: 'invalid' });
+    await expect(st.createParameter({ name: 'EASE', levels: ['a', 'b'], bestEnd: 'last' })).rejects.toMatchObject({ kind: 'invalid' });
+    const withExtra = sampleSnapshot();
+    withExtra.dropdownFields.push({ id: 'f-effort', name: 'Effort', options: [{ id: 'x0', text: 'S', colour: 'none' }, { id: 'x1', text: 'M', colour: 'none' }] });
+    await expect(createFakeStore({ snapshot: withExtra }).createParameter({ name: 'effort', levels: ['a', 'b'], bestEnd: 'last' })).rejects.toMatchObject({ kind: 'invalid' });
+    expect((await st.load()).dropdownFields.filter(f => f.name.toLowerCase() === 'ease')).toHaveLength(1);   // nothing was added
+  });
+
+  test('renameLevel rejects a name another level of the same parameter has; renameParameter one another parameter or dropdown field has', async () => {
+    const st = createFakeStore();
+    await expect(st.renameLevel('f-value', 2, ' medium ')).rejects.toMatchObject({ kind: 'invalid' });
+    await expect(st.renameLevel('f-value', 0, 'HIGH')).rejects.toMatchObject({ kind: 'invalid' });
+    await st.renameLevel('f-value', 1, 'MEDIUM');                  // its own name in other letters is its own
+    expect(param(await st.load(), 'f-value').levels).toEqual(['Low', 'MEDIUM', 'High']);
+    await st.removeParameter('f-ease');                            // a field that is not a parameter still holds its name
+    await expect(st.renameParameter('f-value', 'Ease')).rejects.toMatchObject({ kind: 'invalid' });
+    await st.renameParameter('f-value', 'VALUE');                  // its own name in other letters is its own
+    expect(param(await st.load(), 'f-value').name).toBe('VALUE');
+  });
+
+  test('staleReads: the next load after a write returns the board from before it, and the one after that is current', async () => {
+    const st = createFakeStore({ staleReads: 1 });
+    expect((await st.load()).parameters).toHaveLength(3);          // nothing written yet: nothing to be stale about
+    await st.createParameter({ name: 'Risk', levels: ['a', 'b'], bestEnd: 'last' });
+    expect((await st.load()).parameters.map(p => p.name)).not.toContain('Risk');
+    expect((await st.load()).parameters.map(p => p.name)).toContain('Risk');
+    expect(st.snapshot().parameters.map(p => p.name)).toContain('Risk');
+  });
+
   test('removeParameter keeps the field and card values', async () => {
     const st = createFakeStore();
     const ease = param(await st.load(), 'f-ease');

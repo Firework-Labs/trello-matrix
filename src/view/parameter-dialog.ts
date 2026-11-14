@@ -97,6 +97,11 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialog {
   const { store, signal } = deps;
   let snapshot: BoardSnapshot | null = null;
+  /**
+   * Parameters the store returned from a write that the next read may leave out (a store that reads from a lagging cache).
+   * They are shown, and their names count as taken, until a read includes them, so the same one is never created twice.
+   */
+  const kept = new Map<ParamId, Parameter>();
 
   const backdrop = el('div', 'mm-dialog-backdrop');
   backdrop.hidden = true;
@@ -283,8 +288,9 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     if (signal.aborted) return true;               // the matrix has gone away: nothing is left to draw on
     unread = false;
     showError('');
-    snapshot = next;
-    deps.onChanged(next);
+    for (const id of [...kept.keys()]) if (next.parameters.some(p => p.id === id)) kept.delete(id);
+    snapshot = kept.size === 0 ? next : { ...next, parameters: [...next.parameters, ...structuredClone([...kept.values()])] };
+    deps.onChanged(snapshot);
     render();
     return true;
   }
@@ -319,16 +325,18 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     void reread().finally(() => setBusy(-1));
   }, { signal });
 
+  const keep = (param: Parameter): void => { kept.set(param.id, structuredClone(param)); };
+
   form.addEventListener('submit', ev => {
     ev.preventDefault();
     if (addButton.disabled) return;
     const check = checkName();
     if (check.kind === 'link') {
       const best: BestEnd = bestFirst.input.checked ? 'first' : 'last';
-      void run(() => store.linkParameter(check.field.id, best)).then(outcome => { if (outcome !== 'failed') resetForm(); updateForm(); });
+      void run(async () => { keep(await store.linkParameter(check.field.id, best)); }).then(outcome => { if (outcome !== 'failed') resetForm(); updateForm(); });
     } else if (check.kind === 'new') {
       const input = { name: nameInput.value.trim(), levels: typedLevels(), bestEnd: (bestFirst.input.checked ? 'first' : 'last') as BestEnd };
-      void run(() => store.createParameter(input)).then(outcome => { if (outcome !== 'failed') resetForm(); updateForm(); });
+      void run(async () => { keep(await store.createParameter(input)); }).then(outcome => { if (outcome !== 'failed') resetForm(); updateForm(); });
     }
   }, { signal });
 
@@ -385,7 +393,7 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     remove.addEventListener('click', () => { askFirst(true); keep.focus(); }, { signal });
     keep.addEventListener('click', () => { askFirst(false); remove.focus(); }, { signal });
     sure.addEventListener('click', () => {
-      void run(() => store.removeParameter(id)).then(outcome => {
+      void run(async () => { await store.removeParameter(id); kept.delete(id); }).then(outcome => {
         if (outcome === 'failed' && row.isConnected) askFirst(false);     // when it was removed, the next render takes the row away
       });
     }, { signal });
@@ -420,6 +428,15 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
 
   function commitLevel(id: ParamId, level: number, input: HTMLInputElement): void {
     if (!deps.canRenameLevels) { input.value = snapshot?.parameters.find(p => p.id === id)?.levels[level] ?? ''; return; }
+    const levels = snapshot?.parameters.find(p => p.id === id)?.levels ?? [];
+    const typed = input.value.trim();
+    // What each sibling holds, or is about to hold (a rename of it may still be on its way).
+    const sibling = levels.findIndex((stored, j) => j !== level && sameName(sent.get(`${id}/${j}`) ?? stored, typed));
+    if (typed !== '' && sibling !== -1) {
+      input.value = sent.get(`${id}/${level}`) ?? levels[level] ?? '';
+      showError(`Another level is already called "${typed}".`);
+      return;
+    }
     commit(`${id}/${level}`, input, () => snapshot?.parameters.find(p => p.id === id)?.levels[level] ?? '', text => store.renameLevel(id, level, text));
   }
 
@@ -464,6 +481,7 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
   function close(): void {
     if (backdrop.hidden) return;
     backdrop.hidden = true;
+    kept.clear();
     modal.unlock();
     deps.onClosed();
   }
