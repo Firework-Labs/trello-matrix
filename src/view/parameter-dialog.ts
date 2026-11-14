@@ -37,6 +37,7 @@ const DEFAULT_LEVELS = ['Low', 'Medium', 'High'];
 const MIN_LEVELS = 2;
 const MAX_LEVELS = 3;
 const NOTE_RENAME_LEVELS = "Rename levels in Trello's Custom Fields editor.";
+const MESSAGE_UNREAD = 'The change was made, but the board could not be read again.';
 const NOTE_REMOVE = 'The field and its values stay on the cards.';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -90,7 +91,7 @@ function syncInput(input: HTMLInputElement, value: string): void {
 
 const sameName = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialog {
   const { store, signal } = deps;
@@ -109,10 +110,14 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
   const heading = el('h2', undefined, 'Parameters');
   const intro = el('p', 'mm-pd-note',
     'A parameter is a dropdown field with two or three levels. Cards are placed on the matrix by two of them.');
-  const errorBox = el('p', 'mm-pd-error');
-  errorBox.dataset.testid = 'param-error';
+  const errorBox = el('div', 'mm-pd-error');
   errorBox.setAttribute('role', 'alert');
   errorBox.hidden = true;
+  const errorText = el('span');
+  errorText.dataset.testid = 'param-error';
+  const reload = button('Reload', 'param-reload');
+  reload.hidden = true;
+  errorBox.append(errorText, reload);
   const list = el('div', 'mm-pd-list');
   list.dataset.testid = 'param-list';
   const levelsNote = el('p', 'mm-pd-note');
@@ -240,39 +245,77 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     applyBusy();
     updateForm();
   }
-  /** While a change is in flight no other button can be pressed (Done always can). */
+  /**
+   * True from a change the store accepted until the board has been read again. The dialog then shows a state the store
+   * no longer holds, so nothing in it can be changed until Reload has worked (Done always can be pressed).
+   */
+  let unread = false;
+  /** While a change is in flight, or the board is unread, no other button or input can be used. Reload is only for the unread board. */
   function applyBusy(): void {
-    for (const b of dialog.querySelectorAll('button')) if (b !== done) b.disabled = busy > 0;
+    for (const b of dialog.querySelectorAll('button')) if (b !== done && b !== reload) b.disabled = busy > 0 || unread;
+    reload.disabled = busy > 0;
+    for (const i of dialog.querySelectorAll('input')) i.disabled = unread;
     dialog.setAttribute('aria-busy', String(busy > 0));
   }
-  function showError(text: string): void {
-    errorBox.textContent = text;
+  function showError(text: string, withReload = false): void {
+    errorText.textContent = text;
+    reload.hidden = !withReload;
     errorBox.hidden = text === '';
   }
-  function clearError(): void { showError(''); }
+  function clearError(): void { if (!unread) showError(''); }
 
-  /** Runs one change. Returns whether it went through; on failure the reason is shown and the dialog stays as it is. */
-  function run(change: () => Promise<unknown>): Promise<boolean> {
+  /** Reads the board again and shows it. False (and the Reload message) when the store cannot be read. */
+  async function reread(): Promise<boolean> {
+    let next: BoardSnapshot;
+    try {
+      next = await store.load();
+    } catch {
+      if (!signal.aborted) {
+        unread = true;
+        showError(MESSAGE_UNREAD, true);
+        applyBusy();
+        updateForm();
+      }
+      return false;
+    }
+    if (signal.aborted) return true;               // the matrix has gone away: nothing is left to draw on
+    unread = false;
+    showError('');
+    snapshot = next;
+    deps.onChanged(next);
+    render();
+    return true;
+  }
+
+  /** What became of a change: 'failed' (the store refused it, so nothing changed), 'unread' (made, but the board could not be read again) or 'done'. */
+  type Outcome = 'done' | 'failed' | 'unread';
+
+  /** Runs one change at a time. Only a failure of the change itself is reported as 'failed'; a failed re-read is 'unread'. */
+  function run(change: () => Promise<unknown>): Promise<Outcome> {
     clearError();
     setBusy(1);
-    const result = queue.then(async () => {
+    const result = queue.then(async (): Promise<Outcome> => {
       try {
-        await change();
-        const next = await store.load();
-        snapshot = next;
-        deps.onChanged(next);
-        render();
-        return true;
-      } catch (error) {
-        showError(errorText(error));
-        return false;
+        if (unread || signal.aborted) return 'failed';       // an earlier change is not yet shown: this one waits for Reload, and is dropped
+        try {
+          await change();
+        } catch (error) {
+          if (!signal.aborted) showError(messageOf(error));
+          return 'failed';
+        }
+        return (await reread()) ? 'done' : 'unread';
       } finally {
         setBusy(-1);
       }
     });
-    queue = result;
+    queue = result.then(() => undefined, () => undefined);     // a throw below must not stop later changes
     return result;
   }
+
+  reload.addEventListener('click', () => {
+    setBusy(1);
+    void reread().finally(() => setBusy(-1));
+  }, { signal });
 
   form.addEventListener('submit', ev => {
     ev.preventDefault();
@@ -280,10 +323,10 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     const check = checkName();
     if (check.kind === 'link') {
       const best: BestEnd = bestFirst.input.checked ? 'first' : 'last';
-      void run(() => store.linkParameter(check.field.id, best)).then(ok => { if (ok) resetForm(); updateForm(); });
+      void run(() => store.linkParameter(check.field.id, best)).then(outcome => { if (outcome !== 'failed') resetForm(); updateForm(); });
     } else if (check.kind === 'new') {
       const input = { name: nameInput.value.trim(), levels: typedLevels(), bestEnd: (bestFirst.input.checked ? 'first' : 'last') as BestEnd };
-      void run(() => store.createParameter(input)).then(ok => { if (ok) resetForm(); updateForm(); });
+      void run(() => store.createParameter(input)).then(outcome => { if (outcome !== 'failed') resetForm(); updateForm(); });
     }
   }, { signal });
 
@@ -340,8 +383,8 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     remove.addEventListener('click', () => { askFirst(true); keep.focus(); }, { signal });
     keep.addEventListener('click', () => { askFirst(false); remove.focus(); }, { signal });
     sure.addEventListener('click', () => {
-      void run(() => store.removeParameter(id)).then(ok => {
-        if (!ok && row.isConnected) askFirst(false);
+      void run(() => store.removeParameter(id)).then(outcome => {
+        if (outcome === 'failed' && row.isConnected) askFirst(false);     // when it was removed, the next render takes the row away
       });
     }, { signal });
     actions.append(remove, confirm);
@@ -350,18 +393,32 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     return { el: row, name, levels, best };
   }
 
-  function commitName(id: ParamId, input: HTMLInputElement): void {
-    const stored = snapshot?.parameters.find(p => p.id === id)?.name ?? '';
+  /**
+   * What each input was last asked to hold, while that change is on its way: an edit is compared with this, not with the
+   * snapshot, which is only brought up to date when the board has been read again.
+   */
+  const sent = new Map<string, string>();
+
+  /** Sends one rename for an input, unless the trimmed text is empty or is what the store holds (or is about to hold). */
+  function commit(key: string, input: HTMLInputElement, stored: () => string, write: (text: string) => Promise<unknown>): void {
+    const current = sent.get(key) ?? stored();
     const typed = input.value.trim();
-    if (typed === '' || typed === stored) { input.value = stored; return; }
-    void run(() => store.renameParameter(id, typed)).then(ok => { if (!ok) input.value = snapshot?.parameters.find(p => p.id === id)?.name ?? stored; });
+    if (typed === '' || typed === current) { input.value = current; return; }
+    sent.set(key, typed);
+    void run(() => write(typed)).then(outcome => {
+      if (sent.get(key) !== typed) return;           // a newer edit of this input is on its way, and it settles the input
+      sent.delete(key);
+      if (outcome === 'failed') input.value = stored();
+    });
+  }
+
+  function commitName(id: ParamId, input: HTMLInputElement): void {
+    commit(`${id}/name`, input, () => snapshot?.parameters.find(p => p.id === id)?.name ?? '', text => store.renameParameter(id, text));
   }
 
   function commitLevel(id: ParamId, level: number, input: HTMLInputElement): void {
-    const stored = snapshot?.parameters.find(p => p.id === id)?.levels[level] ?? '';
-    const typed = input.value.trim();
-    if (!deps.canRenameLevels || typed === '' || typed === stored) { input.value = stored; return; }
-    void run(() => store.renameLevel(id, level, typed)).then(ok => { if (!ok) input.value = snapshot?.parameters.find(p => p.id === id)?.levels[level] ?? stored; });
+    if (!deps.canRenameLevels) { input.value = snapshot?.parameters.find(p => p.id === id)?.levels[level] ?? ''; return; }
+    commit(`${id}/${level}`, input, () => snapshot?.parameters.find(p => p.id === id)?.levels[level] ?? '', text => store.renameLevel(id, level, text));
   }
 
   /** Draws the rows from the snapshot. A row is rebuilt only when the set of parameters changes, so typing is never interrupted. */

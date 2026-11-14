@@ -152,8 +152,8 @@
 .mm-dialog button.mm-danger { background: #ae2e24; border-color: #ae2e24; color: #fff; }
 .mm-dialog button.mm-danger:hover:not(:disabled) { background: #8f2219; }
 .mm-pd-note { margin: 0; color: #626f86; }
-.mm-pd-note:empty, .mm-pd-error:empty { display: none; }
-.mm-pd-error { margin: 0; padding: 6px 10px; border-radius: 4px; background: #ffeceb; color: #ae2e24; }
+.mm-pd-note:empty { display: none; }
+.mm-pd-error { margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; border-radius: 4px; background: #ffeceb; color: #ae2e24; }
 .mm-pd-error[hidden] { display: none; }
 .mm-pd-list { display: flex; flex-direction: column; gap: 8px; }
 .mm-pd-param { display: grid; grid-template-columns: 150px 1fr; gap: 6px 12px; align-items: end; padding: 8px 10px; border: 1px solid #dcdfe4; border-radius: 6px; }

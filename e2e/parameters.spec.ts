@@ -250,3 +250,104 @@ test('a person who cannot edit the board has no parameters button and no dialog'
   await expect(page.getByTestId('params')).toBeHidden();
   await expect(dialog(page)).toBeHidden();
 });
+
+const RELOAD_MESSAGE = 'The change was made, but the board could not be read again.';
+const failLoadOnce = (page: import('@playwright/test').Page) =>
+  store(page, s => s.failNext('load', Object.assign(new Error('Trello is not answering.'), { kind: 'network' }) as never));
+
+test('a created parameter whose re-read fails is not created twice, and Reload brings it in', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  await d.getByLabel('Name').fill('Risk');
+  await failLoadOnce(page);
+  await d.getByRole('button', { name: 'Add parameter' }).click();
+  await expect(d.getByTestId('param-error')).toHaveText(RELOAD_MESSAGE);
+  await expect(d.getByRole('button', { name: 'Reload' })).toBeEnabled();
+  await expect(d.getByRole('button', { name: 'Add parameter' })).toBeDisabled();
+  await expect(d.getByLabel('Name')).toBeDisabled();                                      // nothing more can be changed until the board is read
+  expect(await store(page, s => s.calls.filter(c => c.method === 'createParameter').length)).toBe(1);
+  await expect(page.getByTestId('across').locator('option', { hasText: 'Risk' })).toHaveCount(0);   // the matrix has not been told yet
+  await d.getByRole('button', { name: 'Reload' }).click();
+  await expect(d.getByTestId('param-error')).toBeHidden();
+  await expect(row(page, 'f-risk')).toHaveCount(1);
+  await expect(page.getByTestId('across').locator('option', { hasText: 'Risk' })).toHaveCount(1);
+  await expect(d.getByLabel('Name')).toBeEnabled(); await expect(d.getByLabel('Name')).toHaveValue('');
+  expect(await store(page, s => s.calls.filter(c => c.method === 'createParameter').length)).toBe(1);
+});
+
+test('a removed parameter whose re-read fails stays removed: Reload takes it off the dialog and the matrix', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  await row(page, 'f-ease').getByRole('button', { name: 'Remove' }).click();
+  await failLoadOnce(page);
+  await row(page, 'f-ease').getByRole('button', { name: 'Remove' }).click();
+  await expect(d.getByTestId('param-error')).toHaveText(RELOAD_MESSAGE);
+  expect(await store(page, s => s.snapshot().parameters.some(p => p.id === 'f-ease'))).toBe(false);
+  await expect(row(page, 'f-ease').getByRole('button', { name: 'Remove' })).toBeDisabled();   // it is not offered again as if it were still there
+  await expect(row(page, 'f-ease').getByRole('button', { name: 'Keep' })).toBeDisabled();
+  await d.getByRole('button', { name: 'Reload' }).click();
+  await expect(row(page, 'f-ease')).toHaveCount(0);
+  await expect(page.getByTestId('across').locator('option')).toHaveText(['Value', 'Cost']);
+  expect(await store(page, s => s.calls.filter(c => c.method === 'removeParameter').length)).toBe(1);
+});
+
+test('a rename whose re-read fails keeps the new name; Reload brings the matrix along', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  const d = dialog(page); const name = row(page, 'f-value').getByTestId('param-name');
+  await failLoadOnce(page);
+  await name.fill('Benefit'); await name.press('Enter');
+  await expect(d.getByTestId('param-error')).toHaveText(RELOAD_MESSAGE);
+  await expect(name).toHaveValue('Benefit');                                              // the store holds it: it is not put back
+  await expect(page.getByTestId('up').locator('option[value="f-value"]')).toHaveText('Value');
+  await d.getByRole('button', { name: 'Reload' }).click();
+  await expect(d.getByTestId('param-error')).toBeHidden();
+  await expect(name).toHaveValue('Benefit');
+  await expect(page.getByTestId('up').locator('option[value="f-value"]')).toHaveText('Benefit');
+  expect(await store(page, s => s.calls.filter(c => c.method === 'renameParameter').length)).toBe(1);
+});
+
+test('a failed re-read can be retried with Reload until it works', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  const d = dialog(page); const name = row(page, 'f-value').getByTestId('param-name');
+  await failLoadOnce(page);
+  await name.fill('Benefit'); await name.press('Enter');
+  await expect(d.getByTestId('param-error')).toHaveText(RELOAD_MESSAGE);
+  await failLoadOnce(page);
+  await d.getByRole('button', { name: 'Reload' }).click();
+  await expect(d.getByTestId('param-error')).toHaveText(RELOAD_MESSAGE);                  // still blocked
+  await expect(d.getByRole('button', { name: 'Done' })).toBeEnabled();                    // Done always works
+  await d.getByRole('button', { name: 'Reload' }).click();
+  await expect(d.getByTestId('param-error')).toBeHidden();
+  await expect(page.getByTestId('up').locator('option[value="f-value"]')).toHaveText('Benefit');
+});
+
+test('typing the old name again while a rename is pending ends with the input and the store agreeing', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  await store(page, s => {                                                                 // the first rename takes a while to land
+    const original = s.renameParameter; let calls = 0;
+    s.renameParameter = async (id, name) => { if (calls++ === 0) await new Promise(r => setTimeout(r, 500)); return original(id, name); };
+  });
+  const d = dialog(page); const name = row(page, 'f-value').getByTestId('param-name');
+  await name.fill('Benefit'); await name.press('Enter');
+  await name.fill('Value'); await name.press('Enter');                                    // back to the name the store still holds
+  await expect(d).toHaveAttribute('aria-busy', 'false');                                  // everything has settled
+  const stored = await store(page, s => s.snapshot().parameters.find(p => p.id === 'f-value')!.name);
+  await expect(name).toHaveValue(stored);
+  expect(stored).toBe('Value');                                                           // the last thing typed wins
+  await expect(page.getByTestId('up').locator('option[value="f-value"]')).toHaveText('Value');
+});
+
+test('typing a level name again while its rename is pending ends with the input and the store agreeing', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  await store(page, s => {
+    const original = s.renameLevel; let calls = 0;
+    s.renameLevel = async (id, level, name) => { if (calls++ === 0) await new Promise(r => setTimeout(r, 500)); return original(id, level, name); };
+  });
+  const d = dialog(page); const top = row(page, 'f-value').locator('[data-level="2"]');
+  await top.fill('Top'); await top.press('Enter');
+  await top.fill('High'); await top.press('Enter');
+  await expect(d).toHaveAttribute('aria-busy', 'false');
+  const stored = await store(page, s => s.snapshot().parameters.find(p => p.id === 'f-value')!.levels[2]!);
+  await expect(top).toHaveValue(stored);
+  expect(stored).toBe('High');
+});
