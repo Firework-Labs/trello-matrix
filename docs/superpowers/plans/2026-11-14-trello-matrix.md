@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript 5, Vite 6 (multi-page), Vitest 3, Playwright (Chromium and WebKit), no view library, Trello Power-Up client library from `https://p.trellocdn.com/power-up.min.js`, GitHub Pages.
 
-**Status:** written 2026-11-14, awaiting Mike's review and choice of execution method. No task started.
+**Status (2026-11-14 18:06):** Tasks 1 to 12 complete, each reviewed, plus a whole-branch review and one fix wave (branch `matrix-build`, head `d1b387c` plus the handoff commit). Tasks 13 to 15 are blocked on Mike: GitHub repository, Power-Up registration, test board, and the live-check results (checks P1 to P8). Deviations from this plan are listed in the latest file in `handoff/`.
 
 **Spec:** `docs/superpowers/specs/2026-11-13-trello-matrix-design.md` (read it first; section numbers below refer to it). Reference mockup: `docs/superpowers/specs/assets/matrix-mockup.html` (throwaway; copy its look and feel, not its code).
 

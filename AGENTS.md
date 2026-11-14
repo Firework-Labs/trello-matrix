@@ -30,3 +30,33 @@ prioritising a backlog. Static site, no server, all data in Trello.
   always stored worst to best. On screen the best end is up or right.
 - All board reads and writes go through the `BoardStore` interface, so a
   server-backed store can replace the Trello one later.
+
+## Where things are
+
+- `src/model/` pure rules (placement, drop, resequence, pacer, colour).
+- `src/store/board-store.ts` the seam and its contract; `fake-store.ts` and
+  `sample-data.ts` back the dev page and every test.
+- `src/view/` the matrix (`app.ts` mounts it on any `BoardStore`).
+- `src/proof/` the live-check page Mike runs against a test board (P1 to P8).
+- `src/connector.ts` the Power-Up entry (board button, card button).
+- `dev.html` runs the matrix on sample data: `npm run dev`, then open
+  `http://localhost:5173/trello-matrix/dev.html`.
+
+## Running and testing
+
+- `npm test` (Vitest), `npx tsc --noEmit`, `npm run build`.
+- `npx playwright test` runs the browser tests in Chromium and WebKit. A fresh
+  machine needs `npx playwright install chromium webkit` first.
+- Two WebKit drag tests compare positions within 0.5 px and rely on the
+  toolbar being 45 px high and the legend 30 px high.
+
+## Gotchas
+
+- The fake store notifies subscribers only through `remote()`. The real store
+  will also echo the person's own writes; the view is written for that.
+- The real store must meet the contract in `board-store.ts`: reads include its
+  own completed writes, and no snapshot older than its latest write is
+  delivered.
+- Dialogs and the drawer make the rest of the page `inert` through
+  `src/view/modal.ts`. Use it for any new modal.
+
