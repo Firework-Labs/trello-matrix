@@ -4,6 +4,28 @@ Date: 2026-11-13
 Status: reviewed, awaiting Mike's approval
 Reference mockup (throwaway, invented cards): [matrix-mockup.html](assets/matrix-mockup.html)
 
+## Amendment, 2026-11-16: sign-in uses Trello OAuth 2.0
+
+Decision (Mike, 2026-11-16): the Power-Up authorises with Trello's OAuth 2.0
+as a **public client**, not with the legacy API key. Where this document says
+"API key", "allowed origins" or "read and write, without expiry", read it as
+follows:
+
+- The Power-Up has an OAuth 2.0 **client ID**, which is public. There is no
+  client secret, because the site has no server to keep one.
+- The site hosts one extra page, `oauth-callback.html`, that Trello's sign-in
+  window returns to. Its address is registered as the client's callback URL.
+- Each person signs in once through Trello's consent window. Access lasts one
+  hour and renews itself; after 90 days without use Trello asks again. The
+  person needs a Trello account linked to an Atlassian account.
+- Scopes: `read:board:trello` and `write:board:trello`.
+- The approach is still A: a static page, no server, all data in Trello.
+- Trello's documentation does not say whether OAuth 2.0 tokens can use the
+  custom-field endpoints, download cover images, or read hidden card data
+  through REST, nor what the rate limits are. The live checks in section 10
+  (now P1 to P8) are what settles each of these. The legacy key is still
+  supported by Trello with no end date, and is the fallback if a check fails.
+
 ## 1. Intent
 
 Mike has 80–90 items in the backlog of the `67-Pass-Play-Teamwork` Trello board

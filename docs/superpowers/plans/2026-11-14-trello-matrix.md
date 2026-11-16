@@ -12,6 +12,32 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-13-trello-matrix-design.md` (read it first; section numbers below refer to it). Reference mockup: `docs/superpowers/specs/assets/matrix-mockup.html` (throwaway; copy its look and feel, not its code).
 
+## Amendment, 2026-11-16: OAuth 2.0 replaces the API key (Task 2b, done)
+
+Mike decided to sign in with Trello OAuth 2.0 as a public client. Task 2b made
+the change in the code that exists (config, connector, callback page, live
+checks, workflow, setup steps). Read every later mention of the API key in
+this plan through these replacements:
+
+- `VITE_TRELLO_APP_KEY` and `APP_KEY` become `VITE_TRELLO_CLIENT_ID` (repository
+  variable `TRELLO_CLIENT_ID`) and `CLIENT_ID`, with `REDIRECT_URI` and
+  `OAUTH_SCOPES` in `src/config.ts`. The client ID is public; no token or
+  secret is ever committed, logged or written to a file.
+- `t.getRestApi()` becomes `src/trello/auth.ts`: `createAuth(t)` gives
+  `authorize()`, `accessToken()` and `isAuthorized()`; `authHeaders(url, token)`
+  gives the `Authorization: Bearer` header for Trello hosts only.
+- `TrelloPowerUp.initialize` and `TrelloPowerUp.iframe` take
+  `{ clientId: CLIENT_ID, redirectUri: REDIRECT_URI }`.
+- Task 13 (`src/trello/rest.ts`): `createRest` takes `auth: TrelloAuth` and a
+  `baseUrl` instead of `key` and `getToken`; every request sends the Bearer
+  header through `authHeaders` and carries no `key` or `token` query
+  parameter; the base URL is the host check P3 found working. Its tests assert
+  the header and the absence of those query parameters.
+- Task 14: `isConnected()` is `auth.isAuthorized()`; `connect()` is
+  `auth.authorize()`, called straight from the click; `src/matrix-main.ts`
+  creates the iframe with the two options above.
+- Live checks are P1 to P8; P3 signs in with OAuth 2.0 and finds the REST host.
+
 ## Global Constraints
 
 - Node 22 or later. No runtime dependencies; dev dependencies only (`typescript`, `vite`, `vitest`, `@playwright/test`).
