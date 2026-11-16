@@ -30,7 +30,7 @@ interface Opts {
   failSetsAfter?: number;
 }
 interface Call { method: string; url: string; headers: Record<string, string>; body: unknown }
-type Fake = CheckDeps & { store: Map<string, unknown>; renderCallbacks: (() => void)[]; calls: Call[]; order: string[]; savedHost: () => RestHost };
+type Fake = CheckDeps & { store: Map<string, unknown>; renderCallbacks: (() => void)[]; calls: Call[]; order: string[]; savedHost: () => RestHost | null };
 
 function deps(o: Opts = {}): Fake {
   const store = new Map<string, unknown>();
@@ -38,7 +38,7 @@ function deps(o: Opts = {}): Fake {
   const calls: Call[] = [];
   const order: string[] = [];   // which Trello client calls happened, in order
   let hasToken = o.signedIn ?? true;
-  let savedHost: RestHost = o.savedHost ?? 'https://trello.com';
+  let savedHost: RestHost | null = o.savedHost ?? null;   // null until P3 has found one in this tab
   const boom = (): never => { throw new Error('boom'); };
   const cards = o.cards ?? [{ id: 'a' }, { id: 'b' }];
   let sets = 0;
@@ -119,7 +119,7 @@ function deps(o: Opts = {}): Fake {
   let tick = 0;
   return {
     t, auth, fetch: fakeFetch, now: () => (tick += 10), store, renderCallbacks, calls, order,
-    host: { get: () => savedHost, set: h => { savedHost = h; } }, savedHost: () => savedHost,
+    host: { get: () => savedHost ?? 'https://trello.com', saved: () => savedHost, set: h => { savedHost = h; } }, savedHost: () => savedHost,
     loadImage: async () => o.imgLoads ?? true,
   };
 }
@@ -202,6 +202,19 @@ test('P3 fails when neither host answers 200, with both answers in the detail, a
   expect(r.detail).toContain(`${TRELLO_HOST}: HTTP 401 unauthorized permission requested`);
   expect(d.savedHost()).toBe(TRELLO_HOST);
 });
+test('P3 failing says which saved host later checks keep using', async () => {
+  const d = deps({ savedHost: API_HOST, hostStatus: { [API_HOST]: 401, [TRELLO_HOST]: 401 } });
+  const r = await byId('P3').run(d);
+  expect(r.status).toBe('fail');
+  expect(r.detail).toContain(`Later checks keep using ${API_HOST}.`);
+  const declined = await byId('P3').run(deps({ savedHost: TRELLO_HOST, signedIn: false, declines: true }));
+  expect(declined.detail).toContain(`Later checks keep using ${TRELLO_HOST}.`);
+});
+test('P3 failing says nothing about a host when none was saved in this tab', async () => {
+  const d = deps({ hostStatus: { [API_HOST]: 401, [TRELLO_HOST]: 401 } });
+  expect((await byId('P3').run(d)).detail).not.toContain('Later checks keep using');
+  expect(d.savedHost()).toBeNull();
+});
 test('P3 fails when no token results, and makes no request', async () => {
   const d = deps({ signedIn: false, declines: true });
   const r = await byId('P3').run(d);
@@ -223,6 +236,15 @@ test('P3 leaves a marker for the next page load only when a token resulted', asy
   const declined = deps({ signedIn: false, declines: true });
   await byId('P3').run(declined);
   expect(declined.store.has('member|private|mxproofAuth')).toBe(false);
+});
+test('P3 after reload still reports the token when no host answered 200, and the row stays a fail', async () => {
+  const d = deps({ signedIn: false, hostStatus: { [API_HOST]: 401, [TRELLO_HOST]: 'network' } });
+  expect((await byId('P3').run(d)).status).toBe('fail');
+  expect(d.store.has('member|private|mxproofAuth')).toBe(true);
+  const after = await p3AfterReload(d);
+  expect(after).toMatchObject({ id: 'P3', status: 'fail', detail: expect.stringContaining('token after reload: yes') });
+  expect(after?.detail).toContain('no host answered 200');
+  expect(d.store.has('member|private|mxproofAuth')).toBe(false);
 });
 test('P3 after reload passes when the saved marker is there and the token is still there', async () => {
   const d = deps({ signedIn: false });

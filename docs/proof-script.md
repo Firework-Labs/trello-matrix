@@ -28,9 +28,6 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 1. **Person A: press Run on P1.** Wait for the result. It should say `pass`.
    - If it says `fail`, stop. Copy the results (step 13) and send them back
      now. Do not carry on.
-   - The checks that talk to Trello over the web (P5 to P8) need P3 first.
-     If one says "Not signed in. Run P3 first.", do step 2 and then run it
-     again.
 2. **Person A: press Run on P3.** A Trello or Atlassian window asks you to
    allow access. Press **Allow**. After you allow, the small window closes by
    itself. (If it stays open, leave it and tell us.) Then the page asks
@@ -40,8 +37,12 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 3. **Person A: reload the page** (the browser's reload button, or Cmd+R).
    After a moment, P3 shows a result that adds whether you are still signed in.
    It should say `pass`. Your earlier results stay in the table.
-   - If a window asks you to allow access again, that is itself the answer;
-     allow it and carry on.
+   - If the row says `token after reload: no`, that is the answer; carry on.
+
+The next four checks (P5 to P8) talk to Trello over the web and need P3 to
+have been run first; if one says "Not signed in. Run P3 first.", do step 2 and
+then run it again.
+
 4. **Person A: press Run on P5.** It needs a card with a cover image. If the
    row says `manual` and asks for a cover, add one and run it again.
 5. **Person A: press Run on P6.** It moves one card around and sends 30 quick

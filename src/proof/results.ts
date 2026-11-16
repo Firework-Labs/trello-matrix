@@ -23,14 +23,19 @@ export function loadResults(storage: ResultStorage | undefined): CheckResult[] {
   }
 }
 
-/** The REST host P3 found in this tab; trello.com until P3 has found one. */
-export function loadHost(storage: ResultStorage | undefined): RestHost {
+/** The REST host an earlier P3 found in this tab, or null when none did. */
+export function savedHost(storage: ResultStorage | undefined): RestHost | null {
   try {
     const value = storage?.getItem(HOST_KEY);
-    return value === 'https://api.trello.com' || value === 'https://trello.com' ? value : DEFAULT_HOST;
+    return value === 'https://api.trello.com' || value === 'https://trello.com' ? value : null;
   } catch {
-    return DEFAULT_HOST;
+    return null;
   }
+}
+
+/** The REST host to use: the one P3 found in this tab; trello.com until P3 has found one. */
+export function loadHost(storage: ResultStorage | undefined): RestHost {
+  return savedHost(storage) ?? DEFAULT_HOST;
 }
 
 export function saveHost(storage: ResultStorage | undefined, host: RestHost): void {

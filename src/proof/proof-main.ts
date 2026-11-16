@@ -2,7 +2,7 @@ import { CLIENT_ID, REDIRECT_URI } from '../config';
 import { createAuth } from '../trello/auth';
 import { checks, p3AfterReload, p4Closed, p4Survived, writeCheckIds, writePing } from './checks';
 import type { CheckDeps, CheckResult } from './checks';
-import { buildReport, loadHost, loadResults, saveHost, saveResults } from './results';
+import { buildReport, loadHost, savedHost, loadResults, saveHost, saveResults } from './results';
 
 const storage = (() => { try { return window.sessionStorage; } catch { return undefined; } })();
 const t = TrelloPowerUp.iframe({ clientId: CLIENT_ID, redirectUri: REDIRECT_URI });
@@ -10,7 +10,7 @@ const deps: CheckDeps = {
   t,
   auth: createAuth(t),
   fetch: (...args) => window.fetch(...args),
-  host: { get: () => loadHost(storage), set: host => saveHost(storage, host) },   // kept in this tab, with the saved results
+  host: { get: () => loadHost(storage), saved: () => savedHost(storage), set: host => saveHost(storage, host) },   // kept in this tab, with the saved results
   now: () => Date.now(),
 };
 const results = new Map<string, CheckResult>(loadResults(storage).map(r => [r.id, r]));

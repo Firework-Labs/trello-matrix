@@ -61,6 +61,14 @@ describe('authorize', () => {
     expect((err as Error).message).not.toContain(TOKEN);
     expect(log).not.toContain('getAccessToken');
   });
+  test('cuts a very long library message to 200 characters', async () => {
+    const long = 'x'.repeat(1000);
+    const err = await createAuth(fakeT({ libraryRejects: long }).t).authorize().catch((e: unknown) => e);
+    const message = (err as Error).message;
+    expect(message).toContain('x'.repeat(200));
+    expect(message).not.toContain('x'.repeat(201));
+    expect(message.length).toBeLessThan(300);
+  });
   test('rejects with an Error when getAccessToken throws', async () => {
     const err = await createAuth(fakeT({ tokenRejects: 'storage blocked' }).t).authorize().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);

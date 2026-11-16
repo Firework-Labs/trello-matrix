@@ -12,11 +12,15 @@ export interface TrelloAuth {
   isAuthorized(): Promise<boolean>;
 }
 
+const MAX_MESSAGE = 200;
+
+/** The library's own error text, cut short so a long answer cannot flood a result. */
 function messageOf(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === 'string') return e;
-  if (e && typeof e === 'object' && 'message' in e) return String((e as { message: unknown }).message);
-  return 'unknown error';
+  let text = 'unknown error';
+  if (e instanceof Error) text = e.message;
+  else if (typeof e === 'string') text = e;
+  else if (e && typeof e === 'object' && 'message' in e) text = String((e as { message: unknown }).message);
+  return text.slice(0, MAX_MESSAGE);
 }
 
 export function createAuth(t: TrelloIframe, scopes: readonly string[] = OAUTH_SCOPES): TrelloAuth {

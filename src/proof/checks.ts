@@ -9,7 +9,13 @@ export interface CheckResult { id: string; title: string; status: 'pass' | 'fail
 /** The two addresses P3 tries. The documentation does not say which one accepts an OAuth 2.0 token. */
 export type RestHost = 'https://api.trello.com' | 'https://trello.com';
 /** Where the host P3 found is kept (the proof page keeps it with the saved results, in the tab). */
-export interface RestHostStore { get(): RestHost; set(host: RestHost): void }
+export interface RestHostStore {
+  /** The host to use: the saved one, or trello.com when none is saved. */
+  get(): RestHost;
+  /** The host an earlier P3 saved in this tab, or null. */
+  saved(): RestHost | null;
+  set(host: RestHost): void;
+}
 export interface CheckDeps {
   t: TrelloIframe;
   auth: TrelloAuth;
@@ -171,13 +177,15 @@ const p3 = check('P3', P3_TITLE, true, async d => {
   // Straight from the click, with nothing awaited first (a browser may block the window after an async gap).
   // Always called, even when a token exists, so every run tests the sign-in itself.
   const signIn = d.auth.authorize();
+  // A failed P3 does not change the host the later checks use, so say which one that is.
+  const keep = () => { const host = d.host.saved(); return host ? ` Later checks keep using ${host}.` : ''; };
   try {
     await signIn;
   } catch (e) {
-    return { status: 'fail', detail: `token received: no (${errorText(e)})` };
+    return { status: 'fail', detail: `token received: no (${errorText(e)}).${keep()}` };
   }
   const tok = await d.auth.accessToken();
-  if (!tok) return { status: 'fail', detail: 'token received: no (sign-in finished but no access token is available)' };
+  if (!tok) return { status: 'fail', detail: `token received: no (sign-in finished but no access token is available).${keep()}` };
 
   const board = await d.t.board('id');
   const worked: RestHost[] = [];
@@ -189,10 +197,11 @@ const p3 = check('P3', P3_TITLE, true, async d => {
   }
   const base = `token received: yes; ${seen.join('; ')}`;
   const [first] = worked;
-  if (!first) return { status: 'fail', detail: `${base}; no host answered 200` };
+  // The marker is left whenever a token resulted, so the reload always reports whether the token survived.
+  const detail = first ? `${base}; hosts that worked: ${worked.join(', ')}` : `${base}; no host answered 200`;
+  await d.t.set(...P3_MARKER, { ua: userAgent(), at: d.now(), detail, ok: first !== undefined });
+  if (!first) return { status: 'fail', detail: `${detail}.${keep()} Reload this page to see whether the token survives.` };
   d.host.set(first);
-  const detail = `${base}; hosts that worked: ${worked.join(', ')}`;
-  await d.t.set(...P3_MARKER, { ua: userAgent(), at: d.now(), detail });
   return { status: 'pass', detail: `${detail}. Now reload this page; the result for "after reload" replaces this row.` };
 });
 
@@ -207,7 +216,7 @@ export async function p3AfterReload(d: Pick<CheckDeps, 't' | 'now' | 'auth'>): P
     await d.t.remove(...P3_MARKER);
     const still = await d.auth.isAuthorized();
     const before = typeof marker.detail === 'string' && marker.detail ? `${marker.detail}; ` : '';
-    return { id: 'P3', title: P3_TITLE, status: still ? 'pass' : 'fail', detail: `${before}token after reload: ${still ? 'yes' : 'no'}` };
+    return { id: 'P3', title: P3_TITLE, status: still && marker.ok !== false ? 'pass' : 'fail', detail: `${before}token after reload: ${still ? 'yes' : 'no'}` };
   } catch (e) {
     return { id: 'P3', title: P3_TITLE, status: 'fail', detail: errorText(e) };
   }

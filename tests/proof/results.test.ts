@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { buildReport, loadHost, loadResults, saveHost, saveResults } from '../../src/proof/results';
+import { buildReport, loadHost, loadResults, saveHost, saveResults, savedHost } from '../../src/proof/results';
 import type { CheckResult } from '../../src/proof/checks';
 
 const memory = () => {
@@ -27,8 +27,10 @@ test('junk or missing storage gives an empty list rather than an error', () => {
 test('the REST host P3 found is kept in the tab, and only a known host is accepted', () => {
   const tab = memory();
   expect(loadHost(tab)).toBe('https://trello.com');           // P3 has not run
+  expect(savedHost(tab)).toBeNull();
   saveHost(tab, 'https://api.trello.com');
   expect(loadHost(tab)).toBe('https://api.trello.com');
+  expect(savedHost(tab)).toBe('https://api.trello.com');
   tab.setItem('mxproof.host', 'https://evil.example');
   expect(loadHost(tab)).toBe('https://trello.com');
   expect(loadHost(undefined)).toBe('https://trello.com');
