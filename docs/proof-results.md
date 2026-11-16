@@ -11,10 +11,10 @@ Results Mike sent from the test board. Newest first. Sign-in is OAuth 2.0
 | P3 sign in, REST hosts | pass | A token was received. Both `https://api.trello.com` and `https://trello.com` answered 200 with the Bearer header. Still signed in after a reload. |
 | P2 another window's change arrives | pass | Seen without a reload; Trello's render callback fired. (An earlier "fail" was a run where nobody pressed Write ping.) |
 | P4 opening a card | answer | The matrix page is closed when a card opens. The saved view and the "Show on matrix" card button are the way back, as designed. |
-| P5 cover image | not answered | The check found no cover image although the board has cards with images. The check looked only at `cover.scaled` in the REST card list. The check is being rewritten to report what Trello returns. |
-| P6 list positions and pace | not run yet | |
-| P7 create and rename a dropdown field | not run yet | |
-| P8 hidden data through REST, burst of saves | not run yet | |
+| P5 cover image | not answered | The check found no cover image although the board has cards with images. It looked only at `cover.scaled` in the REST card list. Rewritten to look in every place and report what Trello returns; to be run again. |
+| P6 list positions and pace | pass | `top`, `bottom` and a number (65536.5) are all accepted. 30 moves took 3,360 ms with no rate-limit refusals. The rate-limit header is not readable from the browser. The card was put back. |
+| P7 create and rename a dropdown field | not answered | Trello refused the create with 409 `CUSTOM_FIELD_DUPLICATE_FIELD`: a field named `mxproof` was already on the board (a leftover). So the endpoint accepts the OAuth token, but create, rename, set and delete are unproven. Rewritten to reuse a leftover and report each step; to be run again. |
+| P8 hidden data through REST, burst of saves | answer | The Power-Up's id is in the context. This Power-Up's card data was **not** found in `GET /1/boards/{id}?card_pluginData=true` with the OAuth token. 30 hidden saves on one card took 298 ms with no failures. |
 
 Other things Mike saw:
 
@@ -30,3 +30,11 @@ Other things Mike saw:
 - `SYNC_MODE`: `render` works (P2). Polling stays as the fallback.
 - REST base URL: either host works; use `https://api.trello.com`.
 - Return path after opening a card: the matrix is closed by Trello (P4).
+- Reordering: numeric list positions work; about 9 moves a second without
+  refusals, so 90 cards take about 10 seconds (P6).
+- Hidden card data cannot be read through REST with the OAuth token (P8), so
+  the planned polling fallback built on REST cannot work. It is not needed:
+  live updates work (P2) and hidden data is read through the Power-Up's own
+  storage calls (P1). Task 14 builds render mode only.
+- Saving hidden data is fast (P8), so saving every card's previous position
+  before a reorder is cheap.
