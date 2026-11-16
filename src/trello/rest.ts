@@ -99,6 +99,7 @@ export function createRest(o: {
         let token: string | null;
         try { token = await o.auth.accessToken(); } catch { token = null; }
         if (token === null) throw new StoreError('auth', 'Not signed in to Trello.');
+        if (controller.signal.aborted) throw new StoreError('network', TIMED_OUT);   // the token came too late: send nothing
         const url = new URL(path, base);
         for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
         const address = url.toString();

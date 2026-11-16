@@ -397,6 +397,23 @@ describe('the timeout', () => {
     expect(requests[0]).toContain('/1/cards/c2');
     expect(vi.getTimerCount()).toBe(0);
   });
+  test('a token that arrives after the timeout sends nothing', async () => {
+    vi.useFakeTimers();
+    let giveToken!: (t: string) => void;
+    const auth: TrelloAuth = {
+      authorize: async () => {}, isAuthorized: async () => true,
+      accessToken: () => new Promise<string | null>(resolve => { giveToken = resolve; }),
+    };
+    let fetchCalls = 0;
+    const fetchImpl = (async () => { fetchCalls++; return new Response('{}'); }) as typeof fetch;
+    const rest = createRest({ auth, fetch: fetchImpl, pacer: { run: fn => fn() }, sleep: async () => {} });
+    const result = rest.setCardPos('c', 1).catch((e: unknown) => e as Error);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await result).toMatchObject({ kind: 'network', message: 'Trello did not answer in time.' });
+    giveToken('LATE');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchCalls).toBe(0);
+  });
   test('a timeout is not retried', async () => {
     vi.useFakeTimers();
     const { fetchImpl, signals } = hangingFetch();
