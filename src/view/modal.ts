@@ -1,7 +1,7 @@
 /**
  * Keeps a dialog or drawer modal for the keyboard as well as the pointer. While it is locked, everything else in the
  * page it sits in (the toolbar, the matrix, the tray, the legend) is `inert`: it cannot be focused, tabbed to or clicked.
- * Unlocking gives back exactly what was locked.
+ * Unlocking gives back exactly what was locked. An element marked `data-modal-exempt` (the reconnect bar) stays live.
  */
 export interface ModalLock {
   lock(): void;
@@ -13,7 +13,7 @@ export function createModalLock(modal: HTMLElement): ModalLock {
   return {
     lock() {
       if (locked.length > 0 || !modal.parentElement) return;
-      locked = [...modal.parentElement.children].filter(e => e !== modal && !(e as HTMLElement).inert);
+      locked = [...modal.parentElement.children].filter(e => e !== modal && !(e as HTMLElement).inert && !('modalExempt' in (e as HTMLElement).dataset));
       for (const e of locked) (e as HTMLElement).inert = true;
     },
     unlock() {

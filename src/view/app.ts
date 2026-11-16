@@ -2,6 +2,7 @@ import { locate } from '../model/placement';
 import type { BoardSnapshot, Card, ColourBy, ParamId, Parameter, ViewSettings } from '../model/types';
 import type { BoardStore } from '../store/board-store';
 import { createConnectScreen, createLoadErrorScreen } from './connect-screen';
+import { createReconnectBar } from './reconnect-bar';
 import { attachDrag } from './drag';
 import { createLegend } from './legend';
 import { createParameterDialog } from './parameter-dialog';
@@ -114,9 +115,21 @@ export async function mountMatrix(root: HTMLElement, store: BoardStore, opts: Ma
   };
 }
 
-/** One attempt: the connect step if needed, otherwise the board. Rejects when the board cannot be read. */
+/** Whether a store call failed because Trello no longer accepts this person's sign-in. */
+const isAuthError = (error: unknown): boolean => typeof error === 'object' && error !== null && (error as { kind?: unknown }).kind === 'auth';
+
+/**
+ * One attempt: the connect step if needed, otherwise the board. Rejects when the board cannot be read.
+ * A first read that Trello refuses for sign-in is not a load error: the person is sent to the connect step instead.
+ */
 async function mountStart(root: HTMLElement, store: BoardStore, opts: MatrixOptions): Promise<{ destroy(): void }> {
-  if (await store.isConnected()) return mountBoard(root, store, opts);
+  if (await store.isConnected()) {
+    try {
+      return await mountBoard(root, store, opts);
+    } catch (error) {
+      if (!isAuthError(error)) throw error;
+    }
+  }
 
   const abort = new AbortController();
   let board: { destroy(): void } | null = null;
@@ -143,8 +156,43 @@ async function mountStart(root: HTMLElement, store: BoardStore, opts: MatrixOpti
   };
 }
 
-async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOptions): Promise<{ destroy(): void }> {
-  const [snapshot, saved] = await Promise.all([store.load(), loadSavedView(store)]);
+/**
+ * The store as the matrix uses it once it is showing the board: a call that fails because the sign-in has expired is
+ * reported to `onAuth` (once per call) and still rejects with the same error, so whoever made the call handles it as before.
+ * Connecting and subscribing are not watched.
+ */
+function watchAuth(store: BoardStore, onAuth: () => void): BoardStore {
+  const watch = <A extends unknown[], R>(call: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+    try {
+      return await call(...args);
+    } catch (error) {
+      if (isAuthError(error)) onAuth();
+      throw error;
+    }
+  };
+  return {
+    isConnected: () => store.isConnected(),
+    connect: () => store.connect(),
+    subscribe: onChange => store.subscribe(onChange),
+    load: watch(() => store.load()),
+    savePositions: watch((cardId, positions) => store.savePositions(cardId, positions)),
+    setLevel: watch((cardId, param, level) => store.setLevel(cardId, param, level)),
+    createParameter: watch(input => store.createParameter(input)),
+    linkParameter: watch((fieldId, bestEnd) => store.linkParameter(fieldId, bestEnd)),
+    renameParameter: watch((id, name) => store.renameParameter(id, name)),
+    renameLevel: watch((id, level, name) => store.renameLevel(id, level, name)),
+    removeParameter: watch(id => store.removeParameter(id)),
+    reorderLists: watch((orders, onProgress) => store.reorderLists(orders, onProgress)),
+    undoReorder: watch(onProgress => store.undoReorder(onProgress)),
+    openCard: watch(cardId => store.openCard(cardId)),
+    coverImageUrl: watch(cardId => store.coverImageUrl(cardId)),
+    loadView: watch(() => store.loadView()),
+    saveView: watch(view => store.saveView(view)),
+  };
+}
+
+async function mountBoard(root: HTMLElement, plainStore: BoardStore, opts: MatrixOptions): Promise<{ destroy(): void }> {
+  const [snapshot, saved] = await Promise.all([plainStore.load(), loadSavedView(plainStore)]);
   root.replaceChildren();
   root.classList.add('mm-app');
 
@@ -156,6 +204,23 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
 
   const abort = new AbortController();
   const { signal } = abort;
+
+  // From here on, a call refused for sign-in (a drop's writes, the dialog's changes, the drawer's reorder, a reload) shows the bar.
+  const store = watchAuth(plainStore, () => { if (!signal.aborted) reconnect.show(); });
+  const reconnect = createReconnectBar({
+    connect: () => plainStore.connect(),
+    onConnected() { void readAgain(); },
+    signal,
+  });
+  /** After reconnecting: the board is read again and shown. Nothing that failed is sent again. */
+  async function readAgain(): Promise<void> {
+    try {
+      const next = await store.load();
+      if (!signal.aborted) boardRead(next);
+    } catch (error) {
+      if (!signal.aborted && !isAuthError(error)) showToast(`Couldn't read the board again. ${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
 
   // The toolbar above the stage and the main row below it, then the legend.
   const toolbar = createToolbar({
@@ -191,7 +256,7 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
     onClosed() { toolbar.focusResequence(); },
     signal,
   });
-  root.append(toolbar.el, main, legend.el, dialog.el, drawer.el);
+  root.append(reconnect.el, toolbar.el, main, legend.el, dialog.el, drawer.el);
 
   const surface: Surface = createSurface(main, { coverImage: cardId => store.coverImageUrl(cardId) });
   const stage = surface.stage;
@@ -505,6 +570,7 @@ async function loadSavedView(store: BoardStore): Promise<ViewSettings | null> {
   try {
     return await store.loadView();
   } catch (error) {
+    if (isAuthError(error)) throw error;               // start-up: the person is sent to the connect step
     showToast(`Couldn't load your saved view. ${error instanceof Error ? error.message : String(error)}`, 'error');
     return null;
   }
