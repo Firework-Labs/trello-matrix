@@ -44,8 +44,8 @@ prioritising a backlog. Static site, no server, all data in Trello.
 - `src/connector.ts` the Power-Up entry (board button, card button).
 - `src/trello/auth.ts` OAuth 2.0 sign-in (public client) and the Bearer header;
   `src/oauth-callback.ts` is the redirect page Trello sends the person back to.
-- `docs/proof-results.md` what the live checks showed; `docs/acceptance.md` the checklist Mike and a collaborator run on the
-  test board.
+- `docs/proof-results.md` what the live checks showed; `docs/acceptance.md` the checklist Mike runs on the
+  test board, in rounds (Round 1 is solo in Chrome; later rounds add people and Safari).
 - `dev.html` runs the matrix on sample data: `npm run dev`, then open
   `http://localhost:5173/trello-matrix/dev.html`.
 

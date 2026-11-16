@@ -107,7 +107,8 @@ Do the checks on a copy, never on the real board.
    person logged in to Trello, about ten minutes, in Chrome and then in Safari.
    Send both results back.
 2. The checklist for the finished matrix is `docs/acceptance.md`. Run it on the
-   test board, in Chrome and in Safari, with a second person.
+   test board. Round 1 needs only you and Chrome; the later rounds add a
+   second window, other people and Safari.
 
 About signing in: each person allows access once, in a small Trello (or
 Atlassian) window. Trello may ask again after 90 days without use. Each person
