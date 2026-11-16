@@ -10,10 +10,11 @@ export const REDIRECT_URI: string = redirectUriFor(globalThis.location?.origin ?
 
 export const OAUTH_SCOPES: readonly string[] = ['read:board:trello', 'write:board:trello'];
 
-/** Task 14 sets this to true when matrix.html works; until then the Matrix and Show on matrix buttons stay hidden. */
-export const MATRIX_READY: boolean = false;
+/** The "Matrix" board button and the "Show on matrix" card button are shown. */
+export const MATRIX_READY: boolean = true;
 
-export const APP_NAME = 'Matrix';
-export const SYNC_MODE: 'render' | 'poll' = 'poll';            // set from check P2
-export const COVER_MODE: 'img' | 'fetch' | 'off' = 'off';      // set from check P5
-export const RENAME_OPTIONS: boolean = false;                  // set from check P7
+/**
+ * Trello refuses to rename custom fields and their options for OAuth 2.0 tokens (live check P7), so parameter
+ * and level names are changed in Trello's own Custom Fields editor and the matrix shows them read-only.
+ */
+export const CAN_RENAME_FIELDS: boolean = false;

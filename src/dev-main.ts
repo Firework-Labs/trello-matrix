@@ -8,7 +8,7 @@ import { mountMatrix } from './view/app';
  *
  * Page options (query string): cards=N (sample size), readonly=1, connected=0, fresh=1 (no saved view),
  * lists=id,id (the chosen lists), across=id and up=id (the axes), emptyDoing=1 (no cards in the Doing list),
- * params=N (only the first N parameters), renameLevels=0 (levels cannot be renamed),
+ * params=N (only the first N parameters), renameLevels=0 (levels cannot be renamed), renameParams=0 (parameters cannot be renamed),
  * extraField=Name:A,B,C (a dropdown field with these options that is not a parameter),
  * reorderFailAfter=N (the first reorder stops after N cards with a network error; a retry goes through),
  * staleReads=N (after every write the next N reads return the board from before it, like a lagging cache),
@@ -96,7 +96,8 @@ function recordRender(ms: number): void {
 let mounted: { destroy(): void } | null = null;
 async function mount(): Promise<void> {
   mounted = await mountMatrix(document.getElementById('app')!, devStore, {
-    onRenderTime: recordRender, canRenameLevels: query.get('renameLevels') !== '0', focusCardId: query.get('focus') ?? undefined,
+    onRenderTime: recordRender, canRenameLevels: query.get('renameLevels') !== '0', canRenameParameters: query.get('renameParams') !== '0',
+    focusCardId: query.get('focus') ?? undefined,
   });
 }
 /** For the browser tests: take the matrix down and mount it again on the same store (with a failure queued, to see the load error). */

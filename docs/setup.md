@@ -63,8 +63,9 @@ Words used here:
 2. Press **New repository variable** and add:
    - Name `TRELLO_CLIENT_ID`, value: the Client ID from Part 2, step 7.
    - Name `PROOF`, value: `1`
-     (This adds a "Matrix checks" button to the board. It is for the first
-     test only. We will remove it later.)
+     (This adds a "Matrix checks" button to the board, next to the **Matrix**
+     button. It is for the first test only. When the checks are finished,
+     change the value to `0` and publish again to remove it.)
 3. Publish the site again, so it picks up the two values. The site was already
    published once, automatically, when the code was first put on GitHub. That
    copy was made before the values existed, so it has no Client ID in it.
@@ -84,10 +85,16 @@ Do the checks on a copy, never on the real board.
    workspace.
 2. On `Matrix test`, open **Power-Ups** and add **Custom Fields**.
 3. Still in **Power-Ups**, choose **Custom**, find **Matrix**, and add it.
-4. Check that the board now shows a **Matrix checks** button (under the "…"
-   menu if the top bar has no room). It appears when the variable `PROOF` is
-   `1`. For now it is the only button the board shows; the **Matrix** button
-   appears when the next stage is deployed.
+4. Check that the board now shows a **Matrix** button (under the "…" menu if
+   the top bar has no room). Open any card: it now has a **Show on matrix**
+   button.
+   - The first time a person opens the matrix, it asks them to **Connect to
+     Trello**. They do this once. Trello then asks them to allow access in a
+     small window.
+   - While the variable `PROOF` is `1`, the board also shows a **Matrix
+     checks** button. When the checks are finished, set `PROOF` to `0` (Part 3,
+     step 2) and publish the site again, as in Part 3, step 3. The **Matrix
+     checks** button then goes away.
 5. Make sure at least one card on the test board has a **cover image** or an
    **image attachment**. (Open a card, then **Cover**, then pick or upload a
    picture; or use **Attachment** to add an image file.) The image check needs
@@ -95,8 +102,11 @@ Do the checks on a copy, never on the real board.
 
 ## Part 5: Run the checks
 
-Follow `docs/proof-script.md`. It needs a second person logged in to Trello,
-about ten minutes, in Chrome and then in Safari. Send both results back.
+1. The first round of checks is in `docs/proof-script.md`. It needs a second
+   person logged in to Trello, about ten minutes, in Chrome and then in Safari.
+   Send both results back.
+2. The checklist for the finished matrix is `docs/acceptance.md`. Run it on the
+   test board, in Chrome and in Safari, with a second person.
 
 About signing in: each person allows access once, in a small Trello (or
 Atlassian) window. Trello may ask again after 90 days without use. Each person
@@ -104,9 +114,10 @@ needs a Trello account that is linked to an Atlassian account.
 
 ## If something goes wrong
 
-- **No Matrix checks button on the board**: look under the "…" menu first.
-  Then check the connector URL in Part 2 step 3 has no typing mistake, that
-  Pages shows the site as published, and that the variable `PROOF` is `1`.
+- **No Matrix button on the board**: look under the "…" menu first. Then check
+  the connector URL in Part 2 step 3 has no typing mistake, and that Pages
+  shows the site as published. A **Matrix checks** button shows only while the
+  variable `PROOF` is `1`.
 - **Page not found at the connector URL**: Part 1 step 5 was missed, or the
   publish has not finished. Check the Actions tab.
 - **"Matrix checks" opens but the page says it was built without a Trello

@@ -19,6 +19,9 @@ export interface Rest {
 
 const RATE_LIMIT_WAIT_MS = 10_000;
 const MAX_RETRIES = 3;
+/** A request Trello has not answered by now is given up on, so a hung request cannot hold the store's writes and reloads. */
+const REQUEST_TIMEOUT_MS = 20_000;
+const TIMED_OUT = 'Trello did not answer in time.';
 const OPTIONS_UNKNOWN = 'Trello created the field but did not say what its options are. Link it from the dialog instead.';
 
 interface Answer { status: number; ok: boolean; text: string }
@@ -75,8 +78,12 @@ function matchOptions(read: ReadOption[], texts: string[]): DropdownField['optio
 
 export function createRest(o: {
   auth: TrelloAuth; fetch: typeof fetch; pacer: Pacer; sleep: (ms: number) => Promise<void>; baseUrl?: string;
+  /** For the request timeout. Default to the globals. */
+  setTimeout?: (fn: () => void, ms: number) => unknown; clearTimeout?: (handle: unknown) => void;
 }): Rest {
   const base = o.baseUrl ?? REST_BASE;
+  const startTimer = o.setTimeout ?? ((fn: () => void, ms: number): unknown => setTimeout(fn, ms));
+  const stopTimer = o.clearTimeout ?? ((handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>); });
   const doFetch = o.fetch;   // called without a receiver: a browser's fetch throws "Illegal invocation" as a property of another object
 
   /** One HTTP request, paced. Nothing is sent when there is no token. */
@@ -90,15 +97,24 @@ export function createRest(o: {
       const address = url.toString();
       const headers: Record<string, string> = authHeaders(address, token);
       if (body !== undefined) headers['Content-Type'] = 'application/json';
-      let res: Response;
-      let text: string;
+      const controller = new AbortController();
+      let timer: unknown;
+      const timedOut = new Promise<never>((_, reject) => {
+        timer = startTimer(() => { controller.abort(); reject(new StoreError('network', TIMED_OUT)); }, REQUEST_TIMEOUT_MS);
+      });
+      const exchange = (async (): Promise<Answer> => {
+        const res = await doFetch(address, {
+          method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal,
+        });
+        return { status: res.status, ok: res.ok, text: await res.text() };
+      })();
       try {
-        res = await doFetch(address, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-        text = await res.text();
-      } catch {
-        throw new StoreError('network', 'Could not reach Trello.');
+        return await Promise.race([exchange, timedOut]);   // a fetch that ignores the signal still cannot hold this up
+      } catch (e) {
+        throw e instanceof StoreError ? e : new StoreError('network', 'Could not reach Trello.');
+      } finally {
+        stopTimer(timer);
       }
-      return { status: res.status, ok: res.ok, text };
     });
   }
 

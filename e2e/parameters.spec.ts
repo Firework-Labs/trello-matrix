@@ -409,3 +409,67 @@ test('a level cannot be renamed to a name a sibling level has: the input goes ba
   await expect(d.getByTestId('param-error')).toBeHidden();
   expect(await store(page, s => s.calls.filter(c => c.method === 'renameLevel').length)).toBe(1);
 });
+
+const BOTH_NOTE = "Rename parameters and levels in Trello's Custom Fields editor. The matrix shows the new names.";
+const renameCalls = (page: import('@playwright/test').Page) =>
+  store(page, s => s.calls.filter(c => c.method === 'renameParameter' || c.method === 'renameLevel').length);
+
+test('when neither parameters nor levels can be renamed, both are read-only under one note and no rename is sent', async ({ page }) => {
+  await page.goto('dev.html?renameParams=0&renameLevels=0'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  await expect(d).toContainText(BOTH_NOTE);
+  await expect(d).not.toContainText("Rename levels in Trello's Custom Fields editor.");
+  await expect(d.getByTestId('param-levels-note')).toHaveText(BOTH_NOTE);
+  const name = row(page, 'f-value').getByTestId('param-name');
+  await expect(name).toHaveAttribute('readonly', '');
+  await expect(name).toHaveValue('Value');
+  for (const level of [0, 1, 2]) await expect(row(page, 'f-value').locator(`[data-level="${level}"]`)).toHaveAttribute('readonly', '');
+  await name.focus(); await page.keyboard.type('Zed'); await page.keyboard.press('Enter');           // typing does nothing
+  await expect(name).toHaveValue('Value');
+  const top = row(page, 'f-value').locator('[data-level="2"]');
+  await top.focus(); await page.keyboard.type('Zed'); await page.keyboard.press('Enter');
+  await expect(top).toHaveValue('High');
+  expect(await renameCalls(page)).toBe(0);
+  await expect(page.getByTestId('up').locator('option[value="f-value"]')).toHaveText('Value');
+});
+
+test('with only parameter renaming unavailable the parameter note shows and level renames still work', async ({ page }) => {
+  await page.goto('dev.html?renameParams=0'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  await expect(d.getByTestId('param-levels-note')).toHaveText("Rename parameters in Trello's Custom Fields editor.");
+  const name = row(page, 'f-value').getByTestId('param-name');
+  await expect(name).toHaveAttribute('readonly', '');
+  const top = row(page, 'f-value').locator('[data-level="2"]');
+  await expect(top).not.toHaveAttribute('readonly', '');
+  await top.fill('Top'); await top.press('Enter');
+  await expect(page.locator('[data-axis="up"]').last()).toHaveText('Value: Top');
+  expect(await store(page, s => s.calls.filter(c => c.method === 'renameLevel').map(c => c.args))).toEqual([['f-value', 2, 'Top']]);
+  expect(await store(page, s => s.calls.filter(c => c.method === 'renameParameter').length)).toBe(0);
+});
+
+test('with only level renaming unavailable the note is the level note, as before', async ({ page }) => {
+  await page.goto('dev.html?renameLevels=0'); await page.getByTestId('params').click();
+  await expect(dialog(page).getByTestId('param-levels-note')).toHaveText("Rename levels in Trello's Custom Fields editor.");
+  await expect(row(page, 'f-value').getByTestId('param-name')).not.toHaveAttribute('readonly', '');
+});
+
+test('with both renames available there is no note and nothing is read-only', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  await expect(dialog(page).getByTestId('param-levels-note')).toHaveText('');
+  await expect(row(page, 'f-value').getByTestId('param-name')).not.toHaveAttribute('readonly', '');
+  await expect(row(page, 'f-value').locator('[data-level="0"]')).not.toHaveAttribute('readonly', '');
+});
+
+test('with both renames unavailable, adding, linking and removing parameters still work', async ({ page }) => {
+  await page.goto('dev.html?renameParams=0&renameLevels=0&extraField=Effort:S,M,L'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  await d.getByLabel('Name').fill('Risk'); await d.getByRole('button', { name: 'Add parameter' }).click();
+  await expect(row(page, 'f-risk')).toHaveCount(1);
+  await expect(row(page, 'f-risk').getByTestId('param-name')).toHaveAttribute('readonly', '');   // a new row is read-only too
+  await d.getByLabel('Name').fill('Effort'); await d.getByRole('button', { name: 'Link' }).click();
+  await expect(row(page, 'f-effort')).toHaveCount(1);
+  await row(page, 'f-risk').getByRole('button', { name: 'Remove' }).click();
+  await row(page, 'f-risk').getByRole('button', { name: 'Remove' }).click();                          // the second press confirms
+  await expect(row(page, 'f-risk')).toHaveCount(0);
+  expect(await store(page, s => s.calls.map(c => c.method))).toEqual(['createParameter', 'linkParameter', 'removeParameter']);
+});

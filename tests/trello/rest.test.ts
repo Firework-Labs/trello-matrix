@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { REST_BASE, createRest } from '../../src/trello/rest';
 import type { Pacer } from '../../src/model/pacer';
 import type { TrelloAuth } from '../../src/trello/auth';
@@ -12,6 +12,7 @@ interface Recorded {
 interface Opts {
   statuses?: number[]; bodies?: unknown[]; token?: string | null; throws?: boolean;
   tokens?: (string | null)[]; pacer?: Pacer; baseUrl?: string;
+  fetchImpl?: typeof fetch; timers?: { setTimeout: (fn: () => void, ms: number) => unknown; clearTimeout: (h: unknown) => void };
 }
 
 /** A rest client over a fake fetch. Answers come from `statuses` and `bodies`, one per request, in order; a request past the end of `statuses` gets 200 and past the end of `bodies` gets `{}`. */
@@ -42,7 +43,7 @@ function restWithFake(o: Opts = {}) {
     return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
   }) as typeof fetch;
   const pacer: Pacer = o.pacer ?? { run: fn => fn() };
-  const rest = createRest({ auth, fetch: fakeFetch, pacer, sleep: async ms => { slept.push(ms); }, baseUrl: o.baseUrl });
+  const rest = createRest({ auth, fetch: o.fetchImpl ?? fakeFetch, pacer, sleep: async ms => { slept.push(ms); }, baseUrl: o.baseUrl, ...o.timers });
   return { rest, requests, slept, tokenCalls: () => tokenCalls };
 }
 
@@ -321,5 +322,100 @@ describe('the pacer', () => {
   test('a request that the pacer rejects rejects the call', async () => {
     const pacer: Pacer = { run: async () => { throw new Error('queue broken'); } };
     await expect(restWithFake({ pacer }).rest.setCardPos('c', 1)).rejects.toThrow('queue broken');
+  });
+});
+
+describe('the timeout', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** A fetch that never answers; it records the signal it was given. */
+  function hangingFetch() {
+    const signals: AbortSignal[] = [];
+    const fetchImpl = ((_input: unknown, init?: RequestInit) => {
+      signals.push(init!.signal!);
+      return new Promise<Response>(() => {});
+    }) as typeof fetch;
+    return { fetchImpl, signals };
+  }
+
+  test('a fetch that never settles rejects after 20 s, and the signal it was given is aborted', async () => {
+    vi.useFakeTimers();
+    const { fetchImpl, signals } = hangingFetch();
+    const a = restWithFake({ fetchImpl });
+    const result = a.rest.setCardPos('c', 1).catch((e: unknown) => e as Error);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const e = await result;
+    expect(e).toMatchObject({ name: 'StoreError', kind: 'network', message: 'Trello did not answer in time.' });
+    expect(signals[0]!.aborted).toBe(true);
+  });
+  test('a body that never finishes arriving times out too', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = (async () => ({ ok: true, status: 200, text: () => new Promise<string>(() => {}) }) as unknown as Response) as typeof fetch;
+    const result = restWithFake({ fetchImpl }).rest.setCardPos('c', 1).catch((e: unknown) => e as Error);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await result).toMatchObject({ kind: 'network', message: 'Trello did not answer in time.' });
+  });
+  test('a fetch that answers in time is not aborted and its timer is cleared', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const fetchImpl = (async (_i: unknown, init?: RequestInit) => { signals.push(init!.signal!); return new Response('{}'); }) as typeof fetch;
+    await restWithFake({ fetchImpl }).rest.setCardPos('c', 1);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(signals[0]!.aborted).toBe(false);
+  });
+  test('a request that fails quickly clears its timer as well', async () => {
+    vi.useFakeTimers();
+    await expect(restWithFake({ statuses: [500] }).rest.setCardPos('c', 1)).rejects.toMatchObject({ message: 'Trello answered 500.' });
+    await expect(restWithFake({ throws: true }).rest.setCardPos('c', 1)).rejects.toMatchObject({ message: 'Could not reach Trello.' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  test('a timeout is not retried', async () => {
+    vi.useFakeTimers();
+    const { fetchImpl, signals } = hangingFetch();
+    const a = restWithFake({ fetchImpl });
+    const result = a.rest.setCardPos('c', 1).catch((e: unknown) => e as Error);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await result;
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(signals).toHaveLength(1);
+    expect(a.slept).toEqual([]);
+  });
+  test('each retry after a 429 gets its own 20 s', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    let n = 0;
+    const fetchImpl = ((_i: unknown, init?: RequestInit) => {
+      signals.push(init!.signal!);
+      return n++ === 0 ? Promise.resolve(new Response('', { status: 429 })) : new Promise<Response>(() => {});
+    }) as typeof fetch;
+    const result = restWithFake({ fetchImpl }).rest.setCardPos('c', 1).catch((e: unknown) => e as Error);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await result).toMatchObject({ message: 'Trello did not answer in time.' });
+    expect(signals).toHaveLength(2);
+    expect(signals[0]!.aborted).toBe(false);
+    expect(signals[1]!.aborted).toBe(true);
+  });
+  test('the setTimeout and clearTimeout passed in are the ones used', async () => {
+    const started: { fn: () => void; ms: number; handle: object }[] = [];
+    const cleared: unknown[] = [];
+    const timers = {
+      setTimeout: (fn: () => void, ms: number) => { const handle = {}; started.push({ fn, ms, handle }); return handle; },
+      clearTimeout: (h: unknown) => { cleared.push(h); },
+    };
+    const a = restWithFake({ timers });
+    await a.rest.setCardPos('c', 1);
+    expect(started.map(s => s.ms)).toEqual([20_000]);
+    expect(cleared).toEqual([started[0]!.handle]);
+    const b = restWithFake({ timers, fetchImpl: hangingFetch().fetchImpl });
+    const result = b.rest.setCardPos('c', 1).catch((e: unknown) => e as Error);
+    await Promise.resolve();
+    await vi.waitFor(() => expect(started).toHaveLength(2));
+    started[1]!.fn();
+    expect(await result).toMatchObject({ kind: 'network', message: 'Trello did not answer in time.' });
+    expect(cleared).toHaveLength(2);
   });
 });

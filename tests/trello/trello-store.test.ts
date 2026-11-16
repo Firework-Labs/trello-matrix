@@ -609,6 +609,24 @@ describe('createParameter', () => {
     expect((await st.load()).dropdownFields).toHaveLength(4);
   });
 
+  test('when Trello will not create the field, the message says how to link one instead; nothing is stored', async () => {
+    const { w, rest, st } = setup();
+    rest.failOn.set(1, new StoreError('permission', 'Trello does not allow this with the current sign-in.'));
+    expect(await error(st.createParameter(input()))).toMatchObject({
+      kind: 'permission',
+      message: "Trello would not create the field. Create a dropdown field with that name in Trello's Custom Fields editor, then add it here to link it.",
+    });
+    expect(w.ops).toEqual([]);
+    expect((await st.load()).dropdownFields).toHaveLength(4);
+  });
+  test('other refusals of the create pass through unchanged', async () => {
+    for (const refusal of [new StoreError('auth', 'Trello sign-in has expired. Connect again.'), new StoreError('network', 'Trello did not answer in time.')]) {
+      const { rest, st } = setup();
+      rest.failOn.set(1, refusal);
+      expect(await error(st.createParameter(input()))).toBe(refusal);
+    }
+  });
+
   test('two creates of the same name at once send one request; the other is refused', async () => {
     const { rest, st } = setup();
     await st.load();

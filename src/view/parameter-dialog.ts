@@ -11,6 +11,8 @@ export interface ParameterDialogDeps {
   store: BoardStore;
   /** False when the store cannot rename a level (the level names are then read-only, with a note). */
   canRenameLevels: boolean;
+  /** False when the store cannot rename a parameter (the parameter names are then read-only, with a note). */
+  canRenameParameters: boolean;
   /** Called with the board as the store now holds it, after every successful change. */
   onChanged(snapshot: BoardSnapshot): void;
   /** Called when the dialog has been closed with Done. */
@@ -38,6 +40,8 @@ const DEFAULT_LEVELS = ['Low', 'Medium', 'High'];
 const MIN_LEVELS = 2;
 const MAX_LEVELS = 3;
 const NOTE_RENAME_LEVELS = "Rename levels in Trello's Custom Fields editor.";
+const NOTE_RENAME_PARAMETERS = "Rename parameters in Trello's Custom Fields editor.";
+const NOTE_RENAME_BOTH = "Rename parameters and levels in Trello's Custom Fields editor. The matrix shows the new names.";
 const MESSAGE_UNREAD = 'The change was made, but the board could not be read again.';
 const NOTE_REMOVE = 'The field and its values stay on the cards.';
 
@@ -361,6 +365,7 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
 
     const name = textInput('param-name');
     name.maxLength = 100;
+    name.readOnly = !deps.canRenameParameters;
     name.addEventListener('change', () => commitName(id, name), { signal });
 
     const levelsWrap = el('div', 'mm-pd-levels');
@@ -423,6 +428,7 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
   }
 
   function commitName(id: ParamId, input: HTMLInputElement): void {
+    if (!deps.canRenameParameters) { input.value = snapshot?.parameters.find(p => p.id === id)?.name ?? ''; return; }
     commit(`${id}/name`, input, () => snapshot?.parameters.find(p => p.id === id)?.name ?? '', text => store.renameParameter(id, text));
   }
 
@@ -438,6 +444,12 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
       return;
     }
     commit(`${id}/${level}`, input, () => snapshot?.parameters.find(p => p.id === id)?.levels[level] ?? '', text => store.renameLevel(id, level, text));
+  }
+
+  /** What cannot be renamed here, and where to do it instead (empty when everything can). */
+  function renameNote(): string {
+    if (!deps.canRenameLevels) return deps.canRenameParameters ? NOTE_RENAME_LEVELS : NOTE_RENAME_BOTH;
+    return deps.canRenameParameters ? '' : NOTE_RENAME_PARAMETERS;
   }
 
   /** Draws the rows from the snapshot. A row is rebuilt only when the set of parameters changes, so typing is never interrupted. */
@@ -462,7 +474,7 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
       });
       row.best.textContent = `Better end: ${p.levels[p.levels.length - 1]}`;
     }
-    levelsNote.textContent = deps.canRenameLevels || parameters.length === 0 ? '' : NOTE_RENAME_LEVELS;
+    levelsNote.textContent = parameters.length === 0 ? '' : renameNote();
     applyBusy();
     updateForm();
   }

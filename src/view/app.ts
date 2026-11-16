@@ -18,6 +18,8 @@ export interface MatrixOptions {
   focusCardId?: string;
   /** Whether a level can be renamed in the parameter dialog. Default true. */
   canRenameLevels?: boolean;
+  /** Whether a parameter can be renamed in the parameter dialog. Default true. */
+  canRenameParameters?: boolean;
   /** Called with the milliseconds each render took (the dev page collects them). */
   onRenderTime?: (ms: number) => void;
 }
@@ -178,6 +180,7 @@ async function mountBoard(root: HTMLElement, store: BoardStore, opts: MatrixOpti
   const dialog = createParameterDialog({
     store,
     canRenameLevels: opts.canRenameLevels ?? true,
+    canRenameParameters: opts.canRenameParameters ?? true,
     onChanged: boardRead,
     onClosed() { toolbar.focusParams(); },
     signal,

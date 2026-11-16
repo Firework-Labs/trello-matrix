@@ -22,6 +22,7 @@ const RELOAD_DELAY_MS = 200;
 
 const LIMIT_MESSAGE = "Trello's 4,096-character limit for stored data was reached.";
 const RENAME_MESSAGE = "Trello does not let the matrix rename fields. Rename it in Trello's Custom Fields editor.";
+const NOT_CREATED = "Trello would not create the field. Create a dropdown field with that name in Trello's Custom Fields editor, then add it here to link it.";
 const CREATED_NOT_ADDED = 'The field was created in Trello but could not be added to the matrix. Link it from the dialog.';
 const invalid = (message: string) => new StoreError('invalid', message);
 
@@ -358,7 +359,10 @@ export function createTrelloStore(o: {
         assertFits([...decodeParams(await getKey('board', 'shared', KEY_PARAMS)), LARGEST_PARAM_ENTRY]);
         // Sent once, never retried here: a second field would be left on the shared board.
         const field = await step(async () => {
-          const made = await call(() => rest.createDropdownField(id, name, levels)).catch(e => { throw restError(e); });
+          const made = await call(() => rest.createDropdownField(id, name, levels)).catch(e => {
+            const error = restError(e);
+            throw error.kind === 'permission' ? new StoreError('permission', NOT_CREATED) : error;
+          });
           overlay.noteField(made);
           return made;
         });
