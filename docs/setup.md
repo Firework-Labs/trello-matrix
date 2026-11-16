@@ -62,10 +62,15 @@ Words used here:
    - Name `PROOF`, value: `1`
      (This adds a "Matrix checks" button to the board. It is for the first
      test only. We will remove it later.)
-3. Go to the **Actions** tab. If the first publish already ran before you added
-   the variables, open it and press **Re-run all jobs**. Wait for a green tick.
-   (If the publish does not run again, open **Publish to GitHub Pages** in the
-   Actions tab and press **Run workflow**.)
+3. Publish the site again, so it picks up the two values. The site was already
+   published once, automatically, when the code was first put on GitHub. That
+   copy was made before the values existed, so it has no Client ID in it.
+   - Simplest: tell the agent the two variables are set. It re-runs the
+     publish and checks the result.
+   - Or do it yourself: open the **Actions** tab. In the list on the left,
+     click **Publish to GitHub Pages**. On the right, above the list of runs,
+     press **Run workflow**, then the green **Run workflow** button. Wait for
+     a green tick next to the new run (about a minute).
 
 ## Part 4: A test board (you)
 
