@@ -24,6 +24,18 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const TIMED_OUT = 'Trello did not answer in time.';
 const OPTIONS_UNKNOWN = 'Trello created the field but did not say what its options are. Link it from the dialog instead.';
 
+/**
+ * The body of the request that creates a dropdown field. The store (`createDropdownField`) and the live check P7 both
+ * build it here, so a pass of P7 is a pass of the request the store sends. The options carry their own positions, in the
+ * order given, so Trello keeps them in that order.
+ */
+export function createFieldBody(boardId: string, name: string, optionTexts: string[]): Record<string, unknown> {
+  return {
+    idModel: boardId, modelType: 'board', name, type: 'list', pos: 'bottom', display_cardFront: true,
+    options: optionTexts.map((t, i) => ({ value: { text: t }, color: 'none', pos: i + 1 })),
+  };
+}
+
 interface Answer { status: number; ok: boolean; text: string }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -132,10 +144,7 @@ export function createRest(o: {
 
   return {
     async createDropdownField(boardId, name, optionTexts) {
-      const text = await send('POST', '/1/customFields', undefined, {
-        idModel: boardId, modelType: 'board', name, type: 'list', pos: 'bottom', display_cardFront: true,
-        options: optionTexts.map(t => ({ value: { text: t }, color: 'none', pos: 'bottom' })),
-      });
+      const text = await send('POST', '/1/customFields', undefined, createFieldBody(boardId, name, optionTexts));
       const answer = parseJson(text);
       const id = isRecord(answer) && typeof answer.id === 'string' && answer.id !== '' ? answer.id : null;
       if (id === null) throw new StoreError('network', OPTIONS_UNKNOWN);

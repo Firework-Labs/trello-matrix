@@ -3,6 +3,7 @@
 // nothing here contacts Trello unless the proof page passes it the real ones.
 // No result may ever contain the access token.
 import { authHeaders } from '../trello/auth';
+import { createFieldBody } from '../trello/rest';
 import type { TrelloAuth } from '../trello/auth';
 
 export interface CheckResult { id: string; title: string; status: 'pass' | 'fail' | 'manual'; detail: string; ms?: number }
@@ -714,10 +715,7 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
         return;
       }
       createTried = true;
-      const made = await call('create', 'POST', '/1/customFields', {
-        idModel: board.id, modelType: 'board', name: FIELD, type: 'list', pos: 'bottom', display_cardFront: true,
-        options: OPTION_TEXTS.map((text, i) => ({ value: { text }, pos: i + 1 })),
-      });
+      const made = await call('create', 'POST', '/1/customFields', createFieldBody(board.id, FIELD, OPTION_TEXTS));   // the very request the store sends
       if (!made.ok) return;
       const field = asObj(made.json);
       fieldId = asText(field?.id);

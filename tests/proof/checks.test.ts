@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { RUN_ORDER, checks, p3AfterReload, p4Closed, p4Survived, writePing } from '../../src/proof/checks';
 import type { CheckDeps, CheckResult, RestHost } from '../../src/proof/checks';
 import type { TrelloAuth } from '../../src/trello/auth';
+import { createFieldBody } from '../../src/trello/rest';
 
 const TOKEN = 'secret-token-123';
 
@@ -825,6 +826,8 @@ describe('P7', () => {
     expect([...at].sort((x, y) => x - y)).toEqual(at);
     expect(sent(d, 'POST', '/1/customFields')).toHaveLength(1);
     expect(sent(d, 'POST', '/1/customFields')[0]?.body).toMatchObject({ name: 'mxproof', type: 'list', idModel: 'board1', display_cardFront: true });
+    // P7 sends the very request the store sends when it creates a field, so a pass of P7 proves that request.
+    expect(sent(d, 'POST', '/1/customFields')[0]?.body).toEqual(createFieldBody('board1', 'mxproof', ['One', 'Two']));
     expect(sent(d, 'PUT', '/1/customFields/f1/options/f1o1')[0]?.body).toEqual({ value: { text: 'mxproof-renamed' } });
     expect(sent(d, 'PUT', '/1/customFields/f1').map(c => c.body)).toEqual([{ name: 'mxproof2' }, { name: 'mxproof' }]);
     expect(sent(d, 'PUT', '/1/cards/a/customField/f1/item').map(c => c.body)).toEqual([{ idValue: 'f1o1' }, { idValue: '', value: '' }]);

@@ -1,6 +1,6 @@
 import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
-import { buildInputs } from './build-inputs';
+import { buildInputs } from './build-inputs.ts';
 
 export default defineConfig(({ mode }) => ({
   test: { include: ['tests/**/*.test.ts'] },   // e2e/*.spec.ts belongs to Playwright

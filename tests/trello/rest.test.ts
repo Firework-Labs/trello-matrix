@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { REST_BASE, createRest } from '../../src/trello/rest';
+import { REST_BASE, createFieldBody, createRest } from '../../src/trello/rest';
 import type { Pacer } from '../../src/model/pacer';
 import type { TrelloAuth } from '../../src/trello/auth';
 
@@ -92,6 +92,25 @@ describe('setCardPos', () => {
   });
 });
 
+describe('createFieldBody', () => {
+  test('is the whole create request: the field at the bottom, shown on card fronts, each option with its own position 1, 2, 3 in order', () => {
+    expect(createFieldBody('board1', 'Value', ['Low', 'Medium', 'High'])).toEqual({
+      idModel: 'board1', modelType: 'board', name: 'Value', type: 'list', pos: 'bottom', display_cardFront: true,
+      options: [
+        { value: { text: 'Low' }, color: 'none', pos: 1 },
+        { value: { text: 'Medium' }, color: 'none', pos: 2 },
+        { value: { text: 'High' }, color: 'none', pos: 3 },
+      ],
+    });
+  });
+
+  test('createDropdownField sends exactly that body', async () => {
+    const { rest, requests } = restWithFake({ bodies: [{ id: 'f9', name: 'Value', options: [opt('o1', 'Low'), opt('o2', 'High')] }] });
+    await rest.createDropdownField('board1', 'Value', ['Low', 'High']);
+    expect(requests[0]!.body).toEqual(createFieldBody('board1', 'Value', ['Low', 'High']));
+  });
+});
+
 describe('createDropdownField', () => {
   const full = { id: 'f9', name: 'Value', options: [opt('o1', 'Low'), opt('o2', 'High')] };
 
@@ -103,7 +122,7 @@ describe('createDropdownField', () => {
       method: 'POST', path: '/1/customFields',
       body: {
         idModel: 'board1', modelType: 'board', name: 'Value', type: 'list', pos: 'bottom', display_cardFront: true,
-        options: [{ value: { text: 'Low' }, color: 'none', pos: 'bottom' }, { value: { text: 'High' }, color: 'none', pos: 'bottom' }],
+        options: [{ value: { text: 'Low' }, color: 'none', pos: 1 }, { value: { text: 'High' }, color: 'none', pos: 2 }],
       },
     });
     expect(requests[0]!.headers['Content-Type']).toBe('application/json');
