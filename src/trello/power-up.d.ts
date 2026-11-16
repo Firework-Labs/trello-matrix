@@ -24,8 +24,11 @@ interface TrelloModalOptions {
   [key: string]: unknown;
 }
 
-interface TrelloCover { idAttachment?: string | null; idUploadedBackground?: string | null; color?: string | null; [key: string]: unknown }
-interface TrelloCardInfo { id: string; name?: string; idList?: string; pos?: number; cover?: TrelloCover | null; [key: string]: unknown }
+// What t.cards returns for `cover` and `attachments` is not documented well enough to rely on, so every
+// field here is optional and typed `unknown`. Read them defensively (check P5 does).
+interface TrelloCover { idAttachment?: unknown; idUploadedBackground?: unknown; color?: unknown; scaled?: unknown; [key: string]: unknown }
+interface TrelloAttachment { id?: unknown; name?: unknown; url?: unknown; previews?: unknown; mimeType?: unknown; isUpload?: unknown; [key: string]: unknown }
+interface TrelloCardInfo { id: string; name?: string; idList?: string; pos?: number; cover?: TrelloCover | null; attachments?: TrelloAttachment[] | null; [key: string]: unknown }
 interface TrelloListInfo { id: string; name?: string; cards?: TrelloCardInfo[]; [key: string]: unknown }
 
 interface TrelloIframe {

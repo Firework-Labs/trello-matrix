@@ -254,7 +254,13 @@ export function p4Closed(): CheckResult | null {
   return { id: 'P4', title: P4_TITLE, status: 'manual', detail: 'matrix was closed' };
 }
 
-// ---- P5: can a cover image be shown ------------------------------------------
+// ---- P5: every way a cover image could be described, and every way to load one ----
+//
+// An exploration, not a yes/no: we do not know what Trello returns for `cover` or `attachments` (from the
+// Power-Up's own data or from REST) with an OAuth 2.0 token, nor which of those addresses a page may load.
+// So this reads everything defensively (nothing is assumed to exist or to have a type), tries every way of
+// loading each address it finds, and reports what it saw. It writes nothing to the board. The detail holds
+// key names, counts, card ids and masked addresses; never a card name, a full address or the token.
 
 function loadImageElement(url: string): Promise<boolean> {
   return new Promise(resolve => {
@@ -266,32 +272,231 @@ function loadImageElement(url: string): Promise<boolean> {
   });
 }
 
-interface RestCard { id: string; cover?: { scaled?: { url: string }[] } | null }
+type Obj = Record<string, unknown>;
+const asObj = (v: unknown): Obj | null => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Obj) : null);
+const asList = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+const asText = (v: unknown): string => (typeof v === 'string' ? v : '');
+const objects = (v: unknown): Obj[] => asList(v).map(asObj).filter((o): o is Obj => o !== null);
+const keyNames = (o: Obj | null | undefined): string => (o ? `[${Object.keys(o).sort().join(', ')}]` : 'none seen');
+const countOf = <T>(items: T[], test: (item: T) => boolean): number => items.filter(test).length;
 
-const p5 = check('P5', 'A card cover image can be shown', 'Press Run. Needs a card with a cover image.', false, async d => {
-  const tok = await token(d);
-  const board = await d.t.board('id');
-  const cards: RestCard[] = await (await mustBeOk(await rest(d, tok, 'GET', `/1/boards/${board.id}/cards?fields=id,cover`), 'List cards', tok)).json();
-  const withCover = cards.find(c => (c.cover?.scaled?.length ?? 0) > 0);
-  const url = withCover?.cover?.scaled?.at(-1)?.url;
-  if (!url) return { status: 'manual', detail: 'No card on this board has a cover image. Add one to any card and run P5 again.' };
+/** Only what P5 reads of a card, from either source. */
+interface CardView { id: string; cover: Obj | null; attachments: Obj[]; idAttachmentCover: string }
+function viewCard(raw: unknown): CardView | null {
+  const c = asObj(raw);
+  const id = c ? asText(c.id) : '';
+  if (!c || !id) return null;
+  return { id, cover: asObj(c.cover), attachments: objects(c.attachments), idAttachmentCover: asText(c.idAttachmentCover) };
+}
+const viewCards = (raw: unknown): CardView[] => asList(raw).map(viewCard).filter((c): c is CardView => c !== null);
 
-  if (await (d.loadImage ?? loadImageElement)(url)) return { status: 'pass', detail: 'img works (a plain image tag loads the cover)' };
+const hasPreviews = (a: Obj) => asList(a.previews).length > 0;
+const isImage = (a: Obj) => hasPreviews(a) || asText(a.mimeType).startsWith('image/');
+const coverAttachmentId = (c: CardView | undefined) => asText(c?.cover?.idAttachment) || c?.idAttachmentCover || '';
+const showsCover = (c: CardView | undefined) =>
+  c !== undefined && (asText(c.cover?.idAttachment) !== '' || asText(c.cover?.idUploadedBackground) !== '' || c.idAttachmentCover !== '' || asList(c.cover?.scaled).length > 0);
+
+/** The address of the largest entry not wider than 600 px, else of the last entry; '' when there is none. */
+function pickSize(list: unknown): string {
+  const entries = objects(list).filter(e => asText(e.url) !== '');
+  const width = (e: Obj) => (typeof e.width === 'number' ? e.width : Number.NaN);
+  const fitting = entries.filter(e => width(e) <= 600);
+  const chosen = fitting.length > 0 ? fitting.reduce((best, e) => (width(e) > width(best) ? e : best)) : entries.at(-1);
+  return chosen ? asText(chosen.url) : '';
+}
+/** The cover attachment (found by its id) first, then every other image attachment. */
+function coverFirst(attachments: Obj[], coverId: string): Obj[] {
+  const cover = coverId ? attachments.filter(a => asText(a.id) === coverId) : [];
+  return [...cover, ...attachments.filter(a => !cover.includes(a) && isImage(a))];
+}
+const firstAddress = (attachments: Obj[], read: (a: Obj) => string): string => {
+  for (const a of attachments) { const url = read(a); if (url) return url; }
+  return '';
+};
+
+function webAddress(url: string): URL | null {
+  try { const u = new URL(url); return u.protocol === 'https:' || u.protocol === 'http:' ? u : null; } catch { return null; }
+}
+/** host and path with ids masked (16 or more hex characters, 6 or more digits become …), never the query string. */
+function maskAddress(url: string): string {
+  const u = webAddress(url);
+  if (!u) return '[not a web address]';
+  return `${u.hostname}${u.pathname.replace(/[0-9a-fA-F]{16,}/g, '…').replace(/\d{6,}/g, '…')}`;
+}
+/** A refusal or error text for the detail: one line, no token, no full address, no " | " (the section separator), at most 120 characters. */
+function shorten(text: string, tok: string): string {
+  return text.split(tok).join('[token]')
+    .replace(/https?:\/\/[^\s"'<>]+/g, maskAddress)
+    .replace(/\s*\|\s*/g, ' / ').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+type Method = 'img' | 'fetch+token' | 'fetch plain';
+interface Attempt { pair: string; state: 'worked' | 'failed' | 'not tried'; note: string }
+
+async function fetchAttempt(d: CheckDeps, tok: string, url: string, init: RequestInit | undefined): Promise<{ ok: boolean; note: string }> {
+  try {
+    const r = await d.fetch(url, init);
+    if (!r.ok) return { ok: false, note: shorten(await refusal(r, tok), tok) };
+    const size = (await r.blob()).size;
+    return size > 0 ? { ok: true, note: `${size} bytes` } : { ok: false, note: `HTTP ${r.status} but the body was empty` };
+  } catch (e) {
+    return { ok: false, note: shorten(`network error: ${errorText(e)}`, tok) };
+  }
+}
+
+async function tryAddress(d: CheckDeps, tok: string, label: string, url: string): Promise<Attempt[]> {
+  const attempts: Attempt[] = [];
+  const add = (method: Method, state: Attempt['state'], note: string) => attempts.push({ pair: `${label} via ${method}`, state, note });
+
+  try {
+    const loaded = await (d.loadImage ?? loadImageElement)(url);
+    add('img', loaded ? 'worked' : 'failed', loaded ? '' : 'did not load');
+  } catch (e) {
+    add('img', 'failed', shorten(errorText(e), tok));
+  }
 
   const headers = authHeaders(url, tok);   // only Trello's own hosts get the header
-  const trello = 'Authorization' in headers;
-  const how = trello ? 'with the Authorization header' : 'without the Authorization header, because the image is not hosted by Trello';
-  let fetched = 'fetch failed';
-  try {
-    const r = await d.fetch(url, trello ? { headers } : undefined);
-    if (r.ok && (await r.blob()).size > 0) {
-      return { status: 'pass', detail: `fetch works (img did not load; fetching ${how} does)` };
-    }
-    fetched = `fetch ${how} failed: ${await refusal(r, tok)}`;
-  } catch (e) {
-    fetched = `fetch ${how} failed: ${errorText(e)}`;
+  if ('Authorization' in headers) {
+    const r = await fetchAttempt(d, tok, url, { headers });
+    add('fetch+token', r.ok ? 'worked' : 'failed', r.note);
+  } else {
+    add('fetch+token', 'not tried', 'not a Trello host');
   }
-  return { status: 'fail', detail: `img did not load; ${fetched}` };
+
+  const plain = await fetchAttempt(d, tok, url, { credentials: 'omit' });
+  add('fetch plain', plain.ok ? 'worked' : 'failed', plain.note);
+  return attempts;
+}
+
+function clientSummary(rawCount: number, cards: CardView[]): string {
+  return [
+    `Client data (t.cards): ${rawCount} cards`,
+    `cover.idAttachment on ${countOf(cards, c => asText(c.cover?.idAttachment) !== '')}`,
+    `cover.idUploadedBackground on ${countOf(cards, c => asText(c.cover?.idUploadedBackground) !== '')}`,
+    `cover.scaled not empty on ${countOf(cards, c => asList(c.cover?.scaled).length > 0)}`,
+    `cover keys ${keyNames(cards.find(c => c.cover !== null)?.cover)}`,
+    `cards with an attachment that has previews: ${countOf(cards, c => c.attachments.some(hasPreviews))}`,
+    `attachment keys ${keyNames(cards.flatMap(c => c.attachments)[0])}`,
+  ].join('; ');
+}
+function restSummary(rawCount: number, cards: CardView[]): string {
+  return [
+    `REST card list: HTTP 200; ${rawCount} cards`,
+    `cover.idAttachment on ${countOf(cards, c => asText(c.cover?.idAttachment) !== '')}`,
+    `cover.scaled not empty on ${countOf(cards, c => asList(c.cover?.scaled).length > 0)}`,
+    `idAttachmentCover on ${countOf(cards, c => c.idAttachmentCover !== '')}`,
+    `attachments on ${countOf(cards, c => c.attachments.length > 0)}`,
+    `cover keys ${keyNames(cards.find(c => c.cover !== null)?.cover)}`,
+  ].join('; ');
+}
+
+const REST_CARD_FIELDS = 'fields=id,name,cover,idAttachmentCover&attachments=cover&attachment_fields=id,name,url,previews,mimeType,isUpload';
+const REST_ATTACHMENT_FIELDS = 'fields=id,name,url,previews,mimeType,isUpload';
+
+const p5 = check('P5', 'A card cover image can be shown', 'Press Run. Needs a card with a cover image or an image attachment.', false, async d => {
+  const tok = await token(d);
+  const say = (e: unknown) => shorten(errorText(e), tok);
+
+  // 1. What the Power-Up's own data says.
+  let clientCards: CardView[] = [];
+  let clientLine: string;
+  try {
+    const raw: unknown = await d.t.cards('id', 'name', 'cover', 'attachments');
+    clientCards = viewCards(raw);
+    clientLine = clientSummary(asList(raw).length, clientCards);
+  } catch (e) {
+    clientLine = `Client data (t.cards): failed (${say(e)})`;
+  }
+
+  // 2. What REST says.
+  let restCards: CardView[] = [];
+  let restLine: string;
+  try {
+    const board = await d.t.board('id');
+    const r = await rest(d, tok, 'GET', `/1/boards/${board.id}/cards?${REST_CARD_FIELDS}`);
+    if (!r.ok) {
+      restLine = `REST card list: refused (${shorten(await refusal(r, tok), tok)})`;
+    } else {
+      const body: unknown = await r.json().catch(() => undefined);
+      if (Array.isArray(body)) {
+        restCards = viewCards(body);
+        restLine = restSummary(body.length, restCards);
+      } else {
+        restLine = 'REST card list: HTTP 200 but the answer was not a list';
+      }
+    }
+  } catch (e) {
+    restLine = `REST card list: failed (${say(e)})`;
+  }
+
+  // 3. Pick one card to test: the first (in the client data's order) that either source shows a cover for.
+  const clientById = new Map(clientCards.map(c => [c.id, c]));
+  const restById = new Map(restCards.map(c => [c.id, c]));
+  const ids = [...new Set([...clientCards, ...restCards].map(c => c.id))];
+  const attachmentsOf = (id: string) => [...(clientById.get(id)?.attachments ?? []), ...(restById.get(id)?.attachments ?? [])];
+  let cardId = ids.find(id => showsCover(clientById.get(id)) || showsCover(restById.get(id)));
+  let why = 'the first card with a cover in either source';
+  if (cardId === undefined) {
+    cardId = ids.find(id => attachmentsOf(id).some(hasPreviews));
+    why = 'the first card with an image attachment that has previews';
+  }
+  if (cardId === undefined) {
+    return { status: 'manual', detail: ['No cover or image attachment was found in either source.', clientLine, restLine].join(' | ') };
+  }
+  const client = clientById.get(cardId);
+  const restCard = restById.get(cardId);
+
+  // 4. Ask REST for that card's attachments directly.
+  let directAttachments: Obj[] = [];
+  let directLine: string;
+  try {
+    const r = await rest(d, tok, 'GET', `/1/cards/${cardId}/attachments?${REST_ATTACHMENT_FIELDS}`);
+    if (!r.ok) {
+      directLine = `REST card attachments (card ${cardId}): refused (${shorten(await refusal(r, tok), tok)})`;
+    } else {
+      const body: unknown = await r.json().catch(() => undefined);
+      if (Array.isArray(body)) {
+        directAttachments = objects(body);
+        directLine = `REST card attachments (card ${cardId}): HTTP 200; ${body.length} attachments; with previews: ${countOf(directAttachments, hasPreviews)}`;
+      } else {
+        directLine = `REST card attachments (card ${cardId}): HTTP 200 but the answer was not a list`;
+      }
+    }
+  } catch (e) {
+    directLine = `REST card attachments (card ${cardId}): failed (${say(e)})`;
+  }
+
+  // 5. Candidate addresses, one per label, in order.
+  const coverId = coverAttachmentId(client) || coverAttachmentId(restCard);
+  const clientAttachments = coverFirst(client?.attachments ?? [], coverId);
+  const restAttachments = coverFirst([...directAttachments, ...(restCard?.attachments ?? [])], coverId);
+  const found: [string, string][] = [
+    ['client cover.scaled', pickSize(client?.cover?.scaled)],
+    ['rest cover.scaled', pickSize(restCard?.cover?.scaled)],
+    ['client attachment preview', firstAddress(clientAttachments, a => pickSize(a.previews))],
+    ['rest attachment preview', firstAddress(restAttachments, a => pickSize(a.previews))],
+    ['attachment download url', firstAddress([...clientAttachments, ...restAttachments], a => asText(a.url))],
+  ];
+  const candidates = found.filter(([, url]) => webAddress(url) !== null);
+  const notes = found.filter(([, url]) => url !== '' && webAddress(url) === null).map(([label]) => `${label}: the address was not a web address`);
+
+  // 6. Try every candidate every way.
+  const attempts: Attempt[] = [];
+  for (const [label, url] of candidates) attempts.push(...await tryAddress(d, tok, label, url));
+
+  // 7. Report.
+  const list = (state: Attempt['state'], withNote: boolean) =>
+    attempts.filter(a => a.state === state).map(a => (withNote && a.note ? `${a.pair} (${a.note})` : a.pair)).join('; ') || 'none';
+  const detail = [
+    `Works: ${list('worked', false)}`,
+    `Did not work: ${candidates.length === 0 ? `No image address was found for card ${cardId}` : list('failed', true)}`,
+    ...(attempts.some(a => a.state === 'not tried') ? [`Not tried: ${list('not tried', true)}`] : []),
+    `Candidates: ${candidates.map(([label, url]) => `${label} = ${maskAddress(url)}`).join('; ') || 'none'}`,
+    `Card tested: ${cardId} (${why})`,
+    clientLine, restLine, directLine,
+    ...(notes.length > 0 ? [`Notes: ${notes.join('; ')}`] : []),
+  ].join(' | ');
+  return { status: attempts.some(a => a.state === 'worked') ? 'pass' : 'fail', detail };
 }, true);
 
 // ---- P6: list position values and request pacing -----------------------------

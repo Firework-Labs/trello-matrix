@@ -36,6 +36,9 @@ Words used here:
 5. Open the new Power-Up, then **Capabilities**. Turn on:
    - **Board buttons**
    - **Card buttons**
+
+   Do not switch on any other capability. If `attachment-thumbnail` (or any
+   other) was switched on, switch it off again.
 6. Still in the Power-Up, open the **OAuth 2.0** tab. Set it up like this:
    - Set the **security type** to **Public**. (A Public client has no secret.
      That is what this site needs, because it has no server to keep a secret
@@ -81,10 +84,10 @@ Do the checks on a copy, never on the real board.
    workspace.
 2. On `Matrix test`, open **Power-Ups** and add **Custom Fields**.
 3. Still in **Power-Ups**, choose **Custom**, find **Matrix**, and add it.
-4. Check that the board now shows a **Matrix** button at the top right. If the
-   variable `PROOF` is `1`, you also see **Matrix checks**.
-   Until the next build stage is deployed, the **Matrix** and **Show on matrix**
-   buttons open an empty page; only **Matrix checks** works. That is expected.
+4. Check that the board now shows a **Matrix checks** button (under the "…"
+   menu if the top bar has no room). It appears when the variable `PROOF` is
+   `1`. For now it is the only button the board shows; the **Matrix** button
+   appears when the next stage is deployed.
 5. Make sure at least one card on the test board has a **cover image**. (Open a
    card, then **Cover**, then pick or upload a picture.) The image check needs
    one.
@@ -100,8 +103,9 @@ needs a Trello account that is linked to an Atlassian account.
 
 ## If something goes wrong
 
-- **No Matrix button on the board**: check the connector URL in Part 2 step 3
-  has no typing mistake, and that Pages shows the site as published.
+- **No Matrix checks button on the board**: look under the "…" menu first.
+  Then check the connector URL in Part 2 step 3 has no typing mistake, that
+  Pages shows the site as published, and that the variable `PROOF` is `1`.
 - **Page not found at the connector URL**: Part 1 step 5 was missed, or the
   publish has not finished. Check the Actions tab.
 - **"Matrix checks" opens but the page says it was built without a Trello

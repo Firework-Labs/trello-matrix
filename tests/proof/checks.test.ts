@@ -20,6 +20,14 @@ interface Opts {
   /** The host remembered from an earlier P3 in this tab. */
   savedHost?: RestHost;
   coverUrl?: string;
+  /** What `t.cards` returns, for P5 (default: `cards`). Any shape, so the check can be shown odd answers. */
+  clientCards?: unknown[];
+  /** What REST answers to the board's card list (default: card b has a cover whose last size is `coverUrl`). Any JSON. */
+  restCards?: unknown;
+  /** What REST answers to a card's attachment list (default: an empty list). */
+  cardAttachments?: unknown;
+  /** Whether a plain image element loads this address (default: `imgLoads`). */
+  imgLoadsFor?: (url: string) => boolean;
   /** The Power-Up's id in `t.getContext().plugin`: a string, or null for a context that has none. Default 'plugin1'. */
   pluginId?: string | null;
   /** The `idPlugin` REST reports on the card's stored data. Default: the context's plugin id. */
@@ -55,7 +63,7 @@ function deps(o: Opts = {}): Fake {
       store.set(`${scope}|${vis}|${key}`, value);
     },
     remove: async (scope: string, vis: string, key: string) => { store.delete(`${scope}|${vis}|${key}`); },
-    cards: async () => (o.everythingThrows ? boom() : cards),
+    cards: async () => (o.everythingThrows ? boom() : o.clientCards ?? cards),
     lists: async () => (o.everythingThrows ? boom() : [{ id: 'l1', cards: [{ id: 'a' }] }]),
     board: async () => (o.everythingThrows ? boom() : { id: 'board1' }),
     render: (fn: () => void) => { if (o.everythingThrows) boom(); renderCallbacks.push(fn); },
@@ -108,7 +116,9 @@ function deps(o: Opts = {}): Fake {
       };
       json = { id: 'board1', cards: ['a', 'b'].map(id => ({ id, name: id.toUpperCase(), pluginData: pluginData(id) })) };
     } else if (path === '/1/boards/board1/cards') {
-      json = [{ id: 'a', cover: {} }, { id: 'b', cover: { scaled: [{ url: 'https://img.example/small.png' }, { url: o.coverUrl ?? 'https://img.example/big.png' }] } }];
+      json = o.restCards ?? [{ id: 'a', cover: {} }, { id: 'b', cover: { scaled: [{ url: 'https://img.example/small.png' }, { url: o.coverUrl ?? 'https://img.example/big.png' }] } }];
+    } else if (path.endsWith('/attachments')) {
+      json = o.cardAttachments ?? [];
     } else if (path.startsWith('/1/cards/')) {
       const pos = new URL(url).searchParams.get('pos');
       json = { id: 'a', pos: pos === 'top' ? 1 : pos === 'bottom' ? 9999 : pos ? Number(pos) : 2048 };
@@ -120,7 +130,7 @@ function deps(o: Opts = {}): Fake {
   return {
     t, auth, fetch: fakeFetch, now: () => (tick += 10), store, renderCallbacks, calls, order,
     host: { get: () => savedHost ?? 'https://trello.com', saved: () => savedHost, set: h => { savedHost = h; } }, savedHost: () => savedHost,
-    loadImage: async () => o.imgLoads ?? true,
+    loadImage: async url => (o.imgLoadsFor ? o.imgLoadsFor(url) : o.imgLoads ?? true),
   };
 }
 
@@ -148,7 +158,7 @@ test('every check has a one-line instruction, and the texts are the ones the scr
   expect(Object.fromEntries(checks.map(c => [c.id, c.instruction]))).toEqual({
     P1: 'Press Run.',
     P3: 'Press Run and allow access in the window that opens. When the row has a result, reload this page once.',
-    P5: 'Press Run. Needs a card with a cover image.',
+    P5: 'Press Run. Needs a card with a cover image or an image attachment.',
     P6: 'Press Run. It moves one card and puts it back.',
     P7: 'Press Run. It adds a temporary field and removes it.',
     P8: 'Press Run. It takes a few seconds.',
@@ -332,8 +342,9 @@ describe('the host P3 found', () => {
       d.calls.length = 0;
       const r = await byId(id).run(d);
       expect(r.detail).toContain(`REST host: ${expected}`);
-      expect(d.calls.length).toBeGreaterThan(0);
-      expect(d.calls.every(c => c.url.startsWith(`${expected}/`))).toBe(true);
+      const restCalls = d.calls.filter(c => c.url.includes('/1/'));   // P5 also fetches image addresses, which are not REST calls
+      expect(restCalls.length).toBeGreaterThan(0);
+      expect(restCalls.every(c => c.url.startsWith(`${expected}/`))).toBe(true);
     }
   });
 });
@@ -349,55 +360,257 @@ test('no request anywhere carries a key= or token= parameter', async () => {
   }
 });
 
-test('P5 reports which image method worked', async () => {
-  const r = await byId('P5').run(deps({ imgLoads: false, fetchStatus: 200 }));
-  expect(r).toMatchObject({ status: 'pass', detail: expect.stringContaining('fetch') });
-});
-test('P5 prefers img when it loads', async () => {
-  const r = await byId('P5').run(deps({ imgLoads: true }));
-  expect(r).toMatchObject({ status: 'pass', detail: expect.stringMatching(/^img/) });
-});
-test('P5 fetches a Trello-hosted image with the Bearer header', async () => {
-  const url = 'https://trello.com/1/cards/b/attachments/x/download/big.png';
-  const d = deps({ imgLoads: false, coverUrl: url });
-  await byId('P5').run(d);
-  const imageCall = d.calls.find(c => c.url === url);
-  expect(imageCall?.headers.Authorization).toBe(`Bearer ${TOKEN}`);
-});
-test('P5 does not send the Authorization header to a host that is not Trello', async () => {
-  const d = deps({ imgLoads: false, coverUrl: 'https://images.unsplash.com/photo.jpg' });
-  const r = await byId('P5').run(d);
-  const imageCall = d.calls.find(c => c.url === 'https://images.unsplash.com/photo.jpg');
-  expect(imageCall).toBeDefined();
-  expect(imageCall?.headers.Authorization).toBeUndefined();
-  expect(r.detail).toContain('without the Authorization header');
-});
-test('P5 does not treat a look-alike host as Trello', async () => {
-  const d = deps({ imgLoads: false, coverUrl: 'https://trello.com.evil.example/x.png' });
-  await byId('P5').run(d);
-  expect(d.calls.find(c => c.url.startsWith('https://trello.com.evil'))?.headers.Authorization).toBeUndefined();
-});
-test('P5 sends the header to a subdomain of trello.com', async () => {
-  const d = deps({ imgLoads: false, coverUrl: 'https://trello-attachments.trello.com/x.png' });
-  await byId('P5').run(d);
-  expect(d.calls.find(c => c.url.startsWith('https://trello-attachments.trello.com'))?.headers.Authorization).toBe(`Bearer ${TOKEN}`);
-});
-test('P5 fails when neither method works', async () => {
-  const r = await byId('P5').run(deps({ imgLoads: false, fetchStatus: 500 }));
-  expect(r.status).toBe('fail');
-});
-test('P5 reports a 401 on the cover download with its status and the short error text', async () => {
-  const url = 'https://trello.com/1/cards/b/attachments/x/download/big.png';
-  const d = deps({ imgLoads: false, coverUrl: url });
+// ---- P5: every way a cover could be described and shown ----------------------
+
+const TRELLO_IMAGE = 'https://trello.com/1/cards/b/attachments/x/download/big.png';
+type Answer = (url: string, init?: RequestInit) => Response | undefined | Promise<Response | undefined>;
+/** Lets a test answer chosen requests itself; every other request goes to the usual fake. Answered requests are recorded too. */
+function intercept(d: Fake, answer: Answer): Fake {
   const real = d.fetch;
-  d.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
-    String(input) === url ? new Response('unauthorized permission requested', { status: 401 }) : real(input, init)) as typeof fetch;
-  const r = await byId('P5').run(d);
-  expect(r.status).toBe('fail');
-  expect(r.detail).toContain('HTTP 401');
-  expect(r.detail).toContain('unauthorized permission requested');
-  expect(r.detail).toContain('with the Authorization header');
-  expect(r.detail).not.toContain(TOKEN);
+  d.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const mine = await answer(url, init);
+    if (!mine) return real(input, init);
+    d.calls.push({ method: init?.method ?? 'GET', url, headers: (init?.headers ?? {}) as Record<string, string>, body: undefined });
+    return mine;
+  }) as typeof fetch;
+  return d;
+}
+const unauthorized = () => new Response('unauthorized permission requested', { status: 401 });
+const sectionOf = (detail: string, prefix: string) => detail.split(' | ').find(s => s.startsWith(prefix)) ?? '';
+/** A card that only the client data (t.cards) knows has a cover; REST has nothing for it. */
+const clientOnly = (scaled: unknown[], extra: Record<string, unknown> = {}): Opts => ({
+  clientCards: [{ id: 'a', name: 'Secret card name', cover: { idAttachment: 'att1', scaled }, ...extra }],
+  restCards: [{ id: 'a', cover: {} }],
+});
+
+describe('P5', () => {
+  test('is manual when neither source has a cover or an image attachment, and the detail carries both sources\' counts', async () => {
+    const d = deps({
+      clientCards: [{ id: 'a', name: 'Secret card name', cover: null }, { id: 'b', name: 'Another', cover: {}, attachments: [{ id: 'z', url: 'https://x.example/f.pdf', previews: [] }] }],
+      restCards: [{ id: 'a', cover: {}, attachments: [] }, { id: 'b', cover: null }],
+    });
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('manual');
+    expect(r.detail.startsWith('No cover or image attachment was found in either source.')).toBe(true);
+    expect(r.detail).toContain('Client data (t.cards): 2 cards; cover.idAttachment on 0; cover.idUploadedBackground on 0; cover.scaled not empty on 0');
+    expect(r.detail).toContain('REST card list: HTTP 200; 2 cards; cover.idAttachment on 0; cover.scaled not empty on 0; idAttachmentCover on 0; attachments on 0');
+    expect(d.calls.some(c => c.url.includes('/attachments'))).toBe(false);
+  });
+
+  test('finds a cover that only the client data has, and passes when img works for it', async () => {
+    const d = deps({ ...clientOnly([{ url: 'https://img.example/c-small.png', width: 100 }, { url: 'https://img.example/c-600.png', width: 600 }, { url: 'https://img.example/c-big.png', width: 1200 }]), imgLoads: true });
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('pass');
+    expect(r.detail.startsWith('Works: ')).toBe(true);
+    expect(sectionOf(r.detail, 'Works: ')).toContain('client cover.scaled via img');
+    expect(r.detail).toContain('img.example/c-600.png');       // the largest size not wider than 600
+    expect(r.detail).not.toContain('c-big.png');
+    expect(d.calls.some(c => c.url.endsWith('/1/cards/a/attachments?fields=id,name,url,previews,mimeType,isUpload'))).toBe(true);
+  });
+
+  test('takes the first card in the client data\'s order that shows a cover in either source', async () => {
+    const d = deps({
+      clientCards: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+      restCards: [{ id: 'a', cover: {} }, { id: 'b', cover: null }, { id: 'c', idAttachmentCover: 'att9' }, { id: 'd', cover: { idAttachment: 'att8' } }],
+    });
+    await byId('P5').run(d);
+    expect(d.calls.some(c => c.url.includes('/1/cards/c/attachments'))).toBe(true);
+    expect(d.calls.some(c => c.url.includes('/1/cards/d/attachments'))).toBe(false);
+  });
+
+  test('falls back to a card with an image attachment that has previews', async () => {
+    const d = deps({
+      clientCards: [{ id: 'a' }, { id: 'b', attachments: [{ id: 'x', url: 'https://img.example/a.png', mimeType: 'image/png', previews: [{ url: 'https://img.example/pv.png', width: 300 }] }] }],
+      restCards: [{ id: 'a', cover: {} }, { id: 'b', cover: {} }],
+    });
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('pass');
+    expect(sectionOf(r.detail, 'Works: ')).toContain('client attachment preview via img');
+    expect(d.calls.some(c => c.url.includes('/1/cards/b/attachments'))).toBe(true);
+  });
+
+  test('lists the candidates in order, one per label, from every source', async () => {
+    const d = deps({
+      clientCards: [{ id: 'a', cover: { idAttachment: 'att2', scaled: [{ url: 'https://img.example/cs.png', width: 300 }] }, attachments: [
+        { id: 'att1', url: 'https://img.example/other.png', mimeType: 'image/png', previews: [{ url: 'https://img.example/other-pv.png', width: 100 }] },
+        { id: 'att2', url: 'https://img.example/dl2.png', mimeType: 'image/png', previews: [{ url: 'https://img.example/p2-300.png', width: 300 }, { url: 'https://img.example/p2-1000.png', width: 1000 }] }] }],
+      restCards: [{ id: 'a', cover: { idAttachment: 'att2', scaled: [{ url: 'https://img.example/rs.png', width: 300 }] } }],
+      cardAttachments: [{ id: 'att2', url: 'https://img.example/dl2-rest.png', previews: [{ url: 'https://img.example/rp2.png', width: 500 }] }],
+    });
+    const r = await byId('P5').run(d);
+    const candidates = sectionOf(r.detail, 'Candidates: ');
+    const order = ['client cover.scaled', 'rest cover.scaled', 'client attachment preview', 'rest attachment preview', 'attachment download url'].map(l => candidates.indexOf(l));
+    expect(order.every(i => i >= 0)).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    expect(candidates).toContain('img.example/p2-300.png');
+    expect(candidates).toContain('img.example/rp2.png');
+    expect(candidates).toContain('img.example/dl2.png');           // the client's own address wins
+    expect(candidates).not.toContain('other-pv.png');              // the cover attachment is chosen by its id
+    expect(candidates).not.toContain('p2-1000.png');
+    expect(r.detail.match(/client cover\.scaled/g)?.length).toBeGreaterThan(0);
+  });
+
+  test('tries every candidate by img, fetch with the token and fetch without, even when img works', async () => {
+    const d = deps({ ...clientOnly([{ url: TRELLO_IMAGE, width: 300 }]), imgLoads: true });
+    const r = await byId('P5').run(d);
+    const works = sectionOf(r.detail, 'Works: ');
+    expect(works).toContain('client cover.scaled via img');
+    expect(works).toContain('client cover.scaled via fetch+token');
+    expect(works).toContain('client cover.scaled via fetch plain');
+    const imageCalls = d.calls.filter(c => c.url === TRELLO_IMAGE);
+    expect(imageCalls).toHaveLength(2);
+    expect(imageCalls.some(c => c.headers.Authorization === `Bearer ${TOKEN}`)).toBe(true);
+    expect(imageCalls.some(c => c.headers.Authorization === undefined)).toBe(true);
+  });
+
+  test('passes when only fetch with the token works, and says so', async () => {
+    const d = intercept(deps({ ...clientOnly([{ url: TRELLO_IMAGE, width: 300 }]), imgLoads: false }),
+      (url, init) => (url === TRELLO_IMAGE ? ((init?.headers as Record<string, string> | undefined)?.Authorization ? new Response('PNGDATA') : unauthorized()) : undefined));
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('pass');
+    expect(sectionOf(r.detail, 'Works: ')).toContain('client cover.scaled via fetch+token');
+    expect(sectionOf(r.detail, 'Works: ')).not.toContain('via img');
+    expect(sectionOf(r.detail, 'Works: ')).not.toContain('via fetch plain');
+    const failed = sectionOf(r.detail, 'Did not work: ');
+    expect(failed).toContain('client cover.scaled via img');
+    expect(failed).toContain('client cover.scaled via fetch plain (HTTP 401 unauthorized permission requested)');
+  });
+
+  test('passes when only fetch without headers works, and says so', async () => {
+    const d = intercept(deps({ ...clientOnly([{ url: TRELLO_IMAGE, width: 300 }]), imgLoads: false }),
+      (url, init) => {
+        if (url !== TRELLO_IMAGE) return undefined;
+        if ((init?.headers as Record<string, string> | undefined)?.Authorization) throw new TypeError('Failed to fetch');
+        return new Response('PNGDATA');
+      });
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('pass');
+    expect(sectionOf(r.detail, 'Works: ')).toContain('client cover.scaled via fetch plain');
+    expect(sectionOf(r.detail, 'Works: ')).not.toContain('via fetch+token');
+    expect(sectionOf(r.detail, 'Did not work: ')).toContain('client cover.scaled via fetch+token (network error: Failed to fetch)');
+  });
+
+  test('sends fetch without headers and without credentials', async () => {
+    const seen: RequestInit[] = [];
+    const d = intercept(deps({ ...clientOnly([{ url: 'https://img.example/p.png' }]) }), (url, init) => { if (url === 'https://img.example/p.png') { seen.push(init ?? {}); return new Response('PNGDATA'); } });
+    await byId('P5').run(d);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.credentials).toBe('omit');
+    expect(seen[0]?.headers).toBeUndefined();
+  });
+
+  test('fails when candidates exist and nothing loads, naming every attempted pair with its reason', async () => {
+    const d = intercept(deps({ ...clientOnly([{ url: TRELLO_IMAGE }]), imgLoads: false }), url => (url === TRELLO_IMAGE ? unauthorized() : undefined));
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('fail');
+    expect(r.detail.startsWith('Works: none')).toBe(true);
+    const failed = sectionOf(r.detail, 'Did not work: ');
+    expect(failed).toContain('client cover.scaled via img (did not load)');
+    expect(failed).toContain('client cover.scaled via fetch+token (HTTP 401 unauthorized permission requested)');
+    expect(failed).toContain('client cover.scaled via fetch plain (HTTP 401 unauthorized permission requested)');
+    expect(r.detail).toContain('Client data (t.cards): 1 cards');
+    expect(r.detail).toContain('REST card list: HTTP 200');
+    expect(r.detail).toContain('REST card attachments');
+  });
+
+  test('fails, and says why, when a card has a cover but no image address can be found for it', async () => {
+    const d = deps({ clientCards: [{ id: 'a', cover: { idAttachment: 'att1' } }], restCards: [{ id: 'a', cover: {} }] });
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('No image address was found for card a');
+  });
+
+  test('still runs on the client data and reports it when the REST card list is refused', async () => {
+    const d = intercept(deps({ ...clientOnly([{ url: 'https://img.example/p.png' }]) }), url => (new URL(url).pathname === '/1/boards/board1/cards' ? unauthorized() : undefined));
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toContain('REST card list: refused (HTTP 401 unauthorized permission requested)');
+    expect(sectionOf(r.detail, 'Works: ')).toContain('client cover.scaled via img');
+  });
+
+  test('carries on and reports it when the card\'s attachment list is refused', async () => {
+    const d = intercept(deps({ ...clientOnly([{ url: 'https://img.example/p.png' }]) }), url => (new URL(url).pathname === '/1/cards/a/attachments' ? unauthorized() : undefined));
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toContain('REST card attachments (card a): refused (HTTP 401 unauthorized permission requested)');
+  });
+
+  test('reports a network error on a REST step and carries on', async () => {
+    const d = intercept(deps({ ...clientOnly([{ url: 'https://img.example/p.png' }]) }), url => { if (new URL(url).pathname === '/1/cards/a/attachments') throw new TypeError('Failed to fetch'); });
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toContain('REST card attachments (card a): failed (Failed to fetch)');
+  });
+
+  test('never sends the Authorization header to a host that is not Trello, and says it did not try', async () => {
+    const urls = ['https://images.unsplash.com/photo.jpg', 'https://trello.com.evil.example/x.png'];
+    for (const url of urls) {
+      const d = deps({ ...clientOnly([{ url }]), imgLoads: false });
+      const r = await byId('P5').run(d);
+      const sent = d.calls.filter(c => c.url === url);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.headers.Authorization).toBeUndefined();
+      expect(sectionOf(r.detail, 'Not tried: ')).toContain('client cover.scaled via fetch+token');
+      expect(r.detail).not.toContain(TOKEN);
+    }
+  });
+
+  test('sends the Bearer header to a subdomain of trello.com', async () => {
+    const url = 'https://trello-attachments.trello.com/x.png';
+    const d = deps({ ...clientOnly([{ url }]), imgLoads: false });
+    await byId('P5').run(d);
+    expect(d.calls.filter(c => c.url === url).some(c => c.headers.Authorization === `Bearer ${TOKEN}`)).toBe(true);
+  });
+
+  test('masks addresses: no long ids, no query string, no token and no card name in the detail', async () => {
+    const url = 'https://trello.com/1/cards/5f3a9c1e8b7d4a2e6c1f0b3d/attachments/60A1B2C3D4E5F60718293A4B/previews/1234567/download/pic.png?sig=SECRETSIG&token=abc';
+    const d = intercept(deps({ ...clientOnly([{ url }]), imgLoads: false }), u => (u.startsWith('https://trello.com/1/cards/5f3a') ? new Response(`bad credentials ${TOKEN} ${url}`, { status: 401 }) : undefined));
+    const r = await byId('P5').run(d);
+    expect(r.detail).toContain('trello.com/1/cards/…/attachments/…/previews/…/download/pic.png');
+    expect(r.detail).not.toMatch(/[0-9a-f]{16,}/i);
+    expect(r.detail).not.toMatch(/\d{6,}/);
+    expect(r.detail).not.toContain('SECRETSIG');
+    expect(r.detail).not.toContain('?');
+    expect(JSON.stringify(r)).not.toContain(TOKEN);
+    expect(r.detail).not.toContain('Secret card name');
+  });
+
+  test('cuts each refusal or error text to 120 characters', async () => {
+    const url = 'https://img.example/p.png';
+    const d = intercept(deps({ ...clientOnly([{ url }]), imgLoads: false }), u => { if (u === url) return new Response('x'.repeat(500), { status: 500 }); });
+    const r = await byId('P5').run(d);
+    expect(r.detail).toContain('x'.repeat(100));
+    expect(r.detail).not.toContain('x'.repeat(121));
+  });
+
+  test('reports an unexpected shape instead of throwing', async () => {
+    const d = deps({
+      clientCards: [null, 5, 'text', { id: 'a', cover: 'weird', attachments: {} }, { id: 'b', cover: { scaled: 7, idAttachment: 5 }, attachments: [null, { previews: 'no' }] }],
+      restCards: 'not a list',
+    });
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('manual');
+    expect(r.detail).toContain('Client data (t.cards): 5 cards');
+    expect(r.detail).toContain('REST card list: HTTP 200 but the answer was not a list');
+  });
+
+  test('reports a failing t.cards and still runs the REST step', async () => {
+    const d = deps({ restCards: [{ id: 'a', cover: { idAttachment: 'att1', scaled: [{ url: 'https://img.example/r.png' }] } }] });
+    d.t.cards = async () => { throw new Error('no cards for you'); };
+    const r = await byId('P5').run(d);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toContain('Client data (t.cards): failed (no cards for you)');
+    expect(sectionOf(r.detail, 'Works: ')).toContain('rest cover.scaled via img');
+  });
+
+  test('says which card it tested, by id, and which key names it saw (names only)', async () => {
+    const d = deps({ ...clientOnly([{ url: 'https://img.example/p.png' }], { attachments: [{ id: 'att1', url: 'https://img.example/d.png', mimeType: 'image/png', previews: [{ url: 'https://img.example/p.png' }], secretField: 'x' }] }) });
+    const r = await byId('P5').run(d);
+    expect(r.detail).toContain('Card tested: a');
+    expect(r.detail).toContain('cover keys [idAttachment, scaled]');
+    expect(r.detail).toContain('attachment keys [id, mimeType, previews, secretField, url]');
+  });
 });
 
 test('P6 reports requests per second and any 429', async () => {
@@ -470,7 +683,7 @@ test('P6 fails clearly when a position value is refused', async () => {
   expect(r.status).toBe('fail');
 });
 test('a refused request gives the HTTP status and the short error text, so a 401 can be recognised', async () => {
-  for (const id of ['P5', 'P6', 'P7', 'P8']) {
+  for (const id of ['P6', 'P7', 'P8']) {
     const r = await byId(id).run(deps({ fetchStatus: 401 }));
     expect(r.status).toBe('fail');
     expect(r.detail).toContain('HTTP 401 unauthorized permission requested');

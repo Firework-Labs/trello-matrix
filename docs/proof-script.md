@@ -51,8 +51,10 @@ The next four checks (P5 to P8) talk to Trello over the web and need P3 to
 have been run first; if one says "Not signed in. Run P3 first.", do step 2 and
 then run it again.
 
-4. **Person A: press Run on P5.** It needs a card with a cover image. If the
-   row says `manual` and asks for a cover, add one and run it again.
+4. **Person A: press Run on P5.** It needs a card with a cover image or an
+   image attachment. It tries every way of showing the image and the row lists
+   what worked and what did not; the row can be long, so send it whole. If the
+   row says `manual` and found no cover, add one and run it again.
 5. **Person A: press Run on P6.** It moves one card around and sends 30 quick
    requests. It takes a few seconds. Then look at the board: the first card in
    the first list should be back where it was.
