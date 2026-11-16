@@ -58,9 +58,12 @@ then run it again.
 5. **Person A: press Run on P6.** It moves one card around and sends 30 quick
    requests. It takes a few seconds. Then look at the board: the first card in
    the first list should be back where it was.
-6. **Person A: press Run on P7.** It makes a temporary field called `mxproof`
-   and deletes it again. If the row says the field could not be deleted, delete
-   it by hand on the board (Power-Ups, then Custom Fields).
+6. **Person A: press Run on P7.** It makes a temporary dropdown field called
+   `mxproof` (or reuses one left over from an earlier run), renames an option
+   and the field, sets the field on the first card, clears it again, and
+   deletes the field. The row lists every step with `ok` or the reason it
+   failed; send it whole. If the row says the field could not be removed,
+   delete it by hand on the board (the board menu, then Custom Fields).
 7. **Person A: press Run on P8.** It writes a short test value on the first
    card, reads the board back through Trello's web service to see whether that
    value comes back, then saves to the card 30 times in a row and removes the

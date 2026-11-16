@@ -38,7 +38,6 @@ const RESTORE_ATTEMPTS = 3;
 const RESTORE_PAUSE_MS = 3000;
 const P4_KEY = 'mxproof.p4';
 const P8_KEY = 'mxproof8';
-const RENAMED = 'Renamed';
 
 /** Ids of the checks that write to the board; the page keeps them off until "This is a test board" is ticked. */
 export const writeCheckIds: readonly string[] = ['P1', 'P6', 'P7', 'P8'];
@@ -317,11 +316,19 @@ const firstAddress = (attachments: Obj[], read: (a: Obj) => string): string => {
 function webAddress(url: string): URL | null {
   try { const u = new URL(url); return u.protocol === 'https:' || u.protocol === 'http:' ? u : null; } catch { return null; }
 }
-/** host and path with ids masked (16 or more hex characters, 6 or more digits become …), never the query string. */
+/**
+ * host and path with ids masked (16 or more hex characters, 6 or more digits become …), never the query string.
+ * The last path segment is a file name, which is the person's own text, so its name becomes <file> and only
+ * its extension stays (a segment that is just a masked id stays as it is).
+ */
 function maskAddress(url: string): string {
   const u = webAddress(url);
   if (!u) return '[not a web address]';
-  return `${u.hostname}${u.pathname.replace(/[0-9a-fA-F]{16,}/g, '…').replace(/\d{6,}/g, '…')}`;
+  const path = u.pathname.replace(/[0-9a-fA-F]{16,}/g, '…').replace(/\d{6,}/g, '…');
+  const cut = path.lastIndexOf('/') + 1;
+  const last = path.slice(cut);
+  const extension = /\.[A-Za-z0-9]{1,8}$/.exec(last)?.[0] ?? '';
+  return `${u.hostname}${path.slice(0, cut)}${last === '' || last === '…' ? last : `<file>${extension}`}`;
 }
 /** A refusal or error text for the detail: one line, no token, no full address, no " | " (the section separator), at most 120 characters. */
 function shorten(text: string, tok: string): string {
@@ -553,37 +560,248 @@ const p6 = check('P6', 'Which list positions are accepted, and how fast', 'Press
   return { status: restored ? 'pass' : 'fail', detail: `${outcome.detail}; ${note}` };
 }, true);
 
-// ---- P7: create a dropdown field and rename one of its options ---------------
+// ---- P7: a dropdown field's whole life: create, rename, set on a card, clear, delete -------
 
-const p7 = check('P7', 'A dropdown field can be created and an option renamed', 'Press Run. It adds a temporary field and removes it.', false, async d => {
+const FIELD = 'mxproof';
+const FIELD_RENAMED = 'mxproof2';
+const OPTION_RENAMED = 'mxproof-renamed';
+const OPTION_TEXTS = ['One', 'Two'];
+const CLIENT_WAIT_MS = 6000;
+const CLIENT_POLL_MS = 250;
+const BY_HAND = `The field ${FIELD} could not be removed: delete it by hand (board menu, Custom Fields).`;
+
+interface ProofOption { id: string; text: string }
+const optionsOf = (field: Obj | null | undefined): ProofOption[] =>
+  objects(field?.options).map(o => ({ id: asText(o.id), text: asText(asObj(o.value)?.text) })).filter(o => o.id !== '');
+
+/** Looks until `probe` says yes: at once, then every 250 ms for up to 6 s. Returns how long it took, or null. */
+async function waitFor(d: CheckDeps, probe: () => Promise<boolean>): Promise<number | null> {
+  const started = d.now();
+  for (;;) {
+    if (await probe()) return d.now() - started;
+    if (d.now() - started >= CLIENT_WAIT_MS) return null;
+    await sleep(CLIENT_POLL_MS);
+  }
+}
+
+// Every step reports `<step>: ok`, `<step>: HTTP <status> <short text>` or `<step>: <error text>`, so a partial
+// result is still a full answer. The status comes only from the REST steps; what the Power-Up's own data shows is
+// reported but never decides it. The delete always runs. The detail starts with the REST host (it cannot end with
+// it, because the last words may be the instruction to delete the field by hand).
+const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete', 'Press Run. It adds a temporary field, uses it on one card, and removes it.', false, async d => {
   const tok = await token(d);
   const board = await d.t.board('id');
-  const created = (await (await mustBeOk(await rest(d, tok, 'POST', '/1/customFields', {
-    idModel: board.id, modelType: 'board', name: 'mxproof', type: 'list', pos: 'bottom', display_cardFront: true,
-    options: [{ value: { text: 'One' }, pos: 1 }, { value: { text: 'Two' }, pos: 2 }],
-  }), 'Create field', tok)).json()) as { id: string; options?: { id: string }[] };
-  const fieldId = created.id;
-  let problem: string | null = null;
+  const lines: string[] = [`REST host: ${d.host.get()}`];
+  const say = (e: unknown) => shorten(errorText(e), tok);
+  const record = (step: string, text: string) => { lines.push(`${step}: ${text}`); };
+  const ok = (step: string, extra = '') => record(step, `ok${extra}`);
+  /** One REST call. A refusal or error is recorded under `step`; success is left for the caller to record. */
+  const call = async (step: string, method: string, path: string, body?: unknown): Promise<{ ok: boolean; json?: unknown }> => {
+    try {
+      const r = await rest(d, tok, method, path, body);
+      if (!r.ok) { record(step, shorten(await refusal(r, tok), tok)); return { ok: false }; }
+      return { ok: true, json: await r.json().catch(() => undefined) };
+    } catch (e) {
+      record(step, say(e));
+      return { ok: false };
+    }
+  };
+  /** Runs one step; anything it throws is recorded under the step's name instead of ending the check. */
+  const guard = async (step: string, run: () => Promise<void>): Promise<void> => {
+    try { await run(); } catch (e) { record(step, say(e)); }
+  };
+  const skipped = (step: string, why: string) => record(step, `skipped, ${why}`);
+
+  const listPath = `/1/boards/${board.id}/customFields`;
+  let fieldId = '';
+  let options: ProofOption[] = [];
+  let leftover = false;
+  let createdOk = false;
+  let renameOptionOk = false;
+  let setOk = false;
+  let clearOk = false;
+  let deleteOk = false;
+  let cardId = '';
+  let valueOptionId = '';
+
+  /** The board's field list as REST gives it; records a refusal under `step`. */
+  const boardFields = async (step: string): Promise<Obj[] | null> => {
+    const r = await call(step, 'GET', listPath);
+    if (!r.ok) return null;
+    if (!Array.isArray(r.json)) { record(step, 'the answer was not a list'); return null; }
+    return objects(r.json);
+  };
+  /** Reads the field back from REST; null when it cannot be read (recorded under `step`). */
+  const readField = async (step: string): Promise<Obj | null> => {
+    const r = await call(step, 'GET', `/1/customFields/${fieldId}`);
+    if (!r.ok) return null;
+    const field = asObj(r.json);
+    if (!field) record(step, 'the answer was not a field');
+    return field;
+  };
+  /** Does the person's own Power-Up data show this? Reports how long it took, and key names of what it saw first. */
+  const clientSees = async (step: string, what: string, look: () => Promise<{ found: boolean; keys: Obj | null }>, already = false) => {
+    let firstKeys: Obj | null = null;
+    try {
+      const took = await waitFor(d, async () => {
+        const seen = await look();
+        firstKeys ??= seen.keys;
+        return seen.found;
+      });
+      const keys = `(${what} keys ${keyNames(firstKeys)})`;
+      record(step, took === null ? `not seen within ${CLIENT_WAIT_MS / 1000} s ${keys}` : already && took < CLIENT_POLL_MS ? `already present ${keys}` : `seen after ${took} ms ${keys}`);
+    } catch (e) {
+      record(step, say(e));
+    }
+  };
+  const clientSeesField = () => clientSees('client sees field', 'customField', async () => {
+    const fields = objects(asObj(await d.t.board('customFields'))?.customFields);
+    return { found: fields.some(f => asText(f.id) === fieldId), keys: fields[0] ?? null };
+  }, leftover);
+
   try {
-    const optionId = created.options?.[0]?.id;
-    if (!optionId) throw new Error('The new field came back without options.');
-    const optionPath = `/1/customFields/${fieldId}/options/${optionId}`;
-    await mustBeOk(await rest(d, tok, 'PUT', optionPath, { value: { text: RENAMED } }), 'Rename option', tok);
-    const back = (await (await mustBeOk(await rest(d, tok, 'GET', optionPath), 'Read option', tok)).json()) as { value?: { text?: string } };
-    if (back.value?.text !== RENAMED) throw new Error(`Renamed to "${RENAMED}" but read back "${back.value?.text}"`);
-  } catch (e) {
-    problem = errorText(e);
+    // 1. find
+    await guard('find', async () => {
+      const found = await boardFields('find');
+      if (!found) return;
+      const old = found.find(f => asText(f.name) === FIELD);
+      if (old) { leftover = true; fieldId = asText(old.id); options = optionsOf(old); }
+      ok('find', old ? `, a field named ${FIELD} is already on the board` : ', no leftover field');
+    });
+
+    // 2. create (or reuse)
+    await guard('create', async () => {
+      if (leftover) {
+        if (fieldId) { record('create', 'skipped, reusing a leftover field'); createdOk = true; } else record('create', 'the leftover field had no id');
+        return;
+      }
+      const made = await call('create', 'POST', '/1/customFields', {
+        idModel: board.id, modelType: 'board', name: FIELD, type: 'list', pos: 'bottom', display_cardFront: true,
+        options: OPTION_TEXTS.map((text, i) => ({ value: { text }, pos: i + 1 })),
+      });
+      if (!made.ok) return;
+      const field = asObj(made.json);
+      fieldId = asText(field?.id);
+      options = optionsOf(field);
+      if (fieldId) { ok('create'); createdOk = true; } else record('create', 'the answer had no field id');
+    });
+    if (fieldId) {
+      for (let i = options.length; i < OPTION_TEXTS.length; i++) {
+        await guard('add option', async () => {
+          const added = await call('add option', 'POST', `/1/customFields/${fieldId}/options`, { value: { text: OPTION_TEXTS[i] }, color: 'none', pos: 'bottom' });
+          if (!added.ok) return;
+          const id = asText(asObj(added.json)?.id);
+          if (!id) { record('add option', 'the answer had no option id'); return; }
+          options.push({ id, text: OPTION_TEXTS[i]! });
+          ok('add option');
+        });
+      }
+    }
+
+    // 7 (done at once). Does the Power-Up's own board data show the field?
+    if (fieldId) await clientSeesField(); else skipped('client sees field', 'there is no field');
+
+    // 3. rename an option, and read it back
+    const first = options[0];
+    if (!fieldId || !first) {
+      skipped('rename option', fieldId ? 'the field has no option' : 'there is no field');
+    } else {
+      await guard('rename option', async () => {
+        const put = await call('rename option', 'PUT', `/1/customFields/${fieldId}/options/${first.id}`, { value: { text: OPTION_RENAMED } });
+        if (!put.ok) return;
+        ok('rename option');
+        const back = await readField('rename option read back');
+        if (!back) return;
+        const there = optionsOf(back).find(o => o.id === first.id)?.text === OPTION_RENAMED;
+        record('rename option read back', there ? 'ok' : 'not verified, the renamed text is not there');
+        renameOptionOk = there;
+      });
+    }
+
+    // 4. rename the field, read it back, rename it back and read that back
+    if (!fieldId) {
+      skipped('rename field', 'there is no field');
+    } else {
+      for (const [step, name] of [['rename field', FIELD_RENAMED], ['rename field back', FIELD]] as const) {
+        await guard(step, async () => {
+          const put = await call(step, 'PUT', `/1/customFields/${fieldId}`, { name });
+          if (!put.ok) return;
+          ok(step);
+          const back = await readField(`${step} read back`);
+          if (back) record(`${step} read back`, asText(back.name) === name ? 'ok' : 'not verified, the new name is not there');
+        });
+      }
+    }
+
+    // 5. set the field on the first card, and read it back
+    valueOptionId = options[0]?.id ?? '';
+    if (!fieldId || !valueOptionId) {
+      skipped('set on card', fieldId ? 'the field has no option' : 'there is no field');
+    } else {
+      await guard('set on card', async () => {
+        const [firstCard] = await d.t.cards('id');
+        cardId = firstCard?.id ?? '';
+        if (!cardId) { record('set on card', 'the board has no card'); return; }
+        const put = await call('set on card', 'PUT', `/1/cards/${cardId}/customField/${fieldId}/item`, { idValue: valueOptionId });
+        if (!put.ok) return;
+        ok('set on card', ` (card ${cardId})`);
+        const back = await call('set on card read back', 'GET', `/1/cards/${cardId}/customFieldItems`);
+        if (!back.ok) return;
+        const item = objects(back.json).find(i => asText(i.idCustomField) === fieldId && asText(i.idValue) === valueOptionId);
+        record('set on card read back', item ? 'ok' : 'not verified, no item for this field with that value');
+        setOk = item !== undefined;
+      });
+    }
+
+    // 6. does the Power-Up's own card data show the value?
+    if (setOk) {
+      await clientSees('client sees card value', 'customFieldItem', async () => {
+        const cards = objects(await d.t.cards('id', 'customFieldItems'));
+        const items = cards.flatMap(c => objects(c.customFieldItems));
+        const mine = objects(cards.find(c => asText(c.id) === cardId)?.customFieldItems);
+        return { found: mine.some(i => asText(i.idCustomField) === fieldId && asText(i.idValue) === valueOptionId), keys: items[0] ?? null };
+      });
+    } else {
+      skipped('client sees card value', 'the value was not set on the card');
+    }
+
+    // 8. clear it again
+    if (!fieldId || !cardId) {
+      skipped('clear on card', fieldId ? 'no card was used' : 'there is no field');
+    } else {
+      await guard('clear on card', async () => {
+        const put = await call('clear on card', 'PUT', `/1/cards/${cardId}/customField/${fieldId}/item`, { idValue: '', value: '' });
+        if (!put.ok) return;
+        ok('clear on card');
+        const back = await call('clear on card read back', 'GET', `/1/cards/${cardId}/customFieldItems`);
+        if (!back.ok) return;
+        const gone = !objects(back.json).some(i => asText(i.idCustomField) === fieldId);
+        record('clear on card read back', gone ? 'ok' : 'not verified, the item is still on the card');
+        clearOk = gone;
+      });
+    }
+  } finally {
+    // 9. delete, whatever happened above, and check it is gone
+    let gone = false;
+    await guard('delete', async () => {
+      if (fieldId) {
+        const del = await call('delete', 'DELETE', `/1/customFields/${fieldId}`);
+        if (del.ok) ok('delete');
+      } else {
+        skipped('delete', 'there is no field id');
+      }
+      const left = await boardFields('delete read back');
+      if (!left) return;
+      gone = !left.some(f => asText(f.id) === fieldId || asText(f.name) === FIELD || asText(f.name) === FIELD_RENAMED);
+      record('delete read back', gone ? 'ok, the field is gone' : `not verified, a field named ${FIELD} is still on the board`);
+    });
+    deleteOk = gone && fieldId !== '';
+    // Only say "by hand" when there is a field of ours to remove: one we made or found, or one the list still shows.
+    if (!gone && (fieldId !== '' || leftover)) lines.push(BY_HAND);
   }
-  let leftover = '';
-  try {
-    await mustBeOk(await rest(d, tok, 'DELETE', `/1/customFields/${fieldId}`), 'Delete field', tok);
-  } catch (e) {
-    leftover = ` The test field "mxproof" could not be deleted (${errorText(e)}); delete it by hand.`;
-  }
-  if (problem !== null) return { status: 'fail', detail: `${problem}.${leftover}` };
-  if (leftover) return { status: 'fail', detail: `Field created and option renamed.${leftover}` };
-  return { status: 'pass', detail: `Field created; option renamed to "${RENAMED}" and read back; field deleted` };
-}, true);
+  const pass = createdOk && renameOptionOk && setOk && clearOk && deleteOk;
+  return { status: pass ? 'pass' : 'fail', detail: lines.join(' | ') };
+});
 
 // ---- P8: hidden card data through REST, and a burst of card-storage saves ----
 

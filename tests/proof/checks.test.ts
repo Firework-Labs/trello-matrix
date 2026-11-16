@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { RUN_ORDER, checks, p3AfterReload, p4Closed, p4Survived, writePing } from '../../src/proof/checks';
-import type { CheckDeps, RestHost } from '../../src/proof/checks';
+import type { CheckDeps, CheckResult, RestHost } from '../../src/proof/checks';
 import type { TrelloAuth } from '../../src/trello/auth';
 
 const TOKEN = 'secret-token-123';
@@ -26,6 +26,11 @@ interface Opts {
   restCards?: unknown;
   /** What REST answers to a card's attachment list (default: an empty list). */
   cardAttachments?: unknown;
+  /** A field named mxproof is already on the board, with this many options (a leftover from an earlier run). */
+  leftoverField?: { options: number };
+  /** The Power-Up's own data (`t.cards`, `t.board`) never shows the custom field values or fields Trello's API accepted. */
+  clientHidesItems?: boolean;
+  clientHidesFields?: boolean;
   /** Whether a plain image element loads this address (default: `imgLoads`). */
   imgLoadsFor?: (url: string) => boolean;
   /** The Power-Up's id in `t.getContext().plugin`: a string, or null for a context that has none. Default 'plugin1'. */
@@ -38,7 +43,9 @@ interface Opts {
   failSetsAfter?: number;
 }
 interface Call { method: string; url: string; headers: Record<string, string>; body: unknown }
-type Fake = CheckDeps & { store: Map<string, unknown>; renderCallbacks: (() => void)[]; calls: Call[]; order: string[]; savedHost: () => RestHost | null };
+interface FakeField { id: string; name: string; options: { id: string; value: { text: string }; color: string }[] }
+interface FakeItem { id: string; idCustomField: string; idValue: string; idModel: string }
+type Fake = CheckDeps & { fields: FakeField[]; items: FakeItem[]; store: Map<string, unknown>; renderCallbacks: (() => void)[]; calls: Call[]; order: string[]; savedHost: () => RestHost | null };
 
 function deps(o: Opts = {}): Fake {
   const store = new Map<string, unknown>();
@@ -48,6 +55,61 @@ function deps(o: Opts = {}): Fake {
   let hasToken = o.signedIn ?? true;
   let savedHost: RestHost | null = o.savedHost ?? null;   // null until P3 has found one in this tab
   const boom = (): never => { throw new Error('boom'); };
+  // Board custom fields and the values set on cards, kept like Trello keeps them.
+  const fields: FakeField[] = o.leftoverField
+    ? [{ id: 'fOld', name: 'mxproof', options: Array.from({ length: o.leftoverField.options }, (_, i) => ({ id: `fOldo${i + 1}`, value: { text: `Old${i + 1}` }, color: 'none' })) }]
+    : [];
+  const items: FakeItem[] = [];
+  let sequence = 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const customFieldRoutes = (method: string, path: string, body: any): { status?: number; json: unknown } | undefined => {
+    const missing = { status: 404, json: { message: 'invalid id' } };
+    if (method === 'GET' && path === '/1/boards/board1/customFields') return { json: fields };
+    if (method === 'POST' && path === '/1/customFields') {
+      if (fields.some(f => f.name === body.name)) return { status: 409, json: { error: 'CUSTOM_FIELD_DUPLICATE_FIELD', message: 'A custom field with that name and type already exists' } };
+      const id = `f${++sequence}`;
+      const field = { id, name: body.name as string, options: (body.options as { value: { text: string } }[]).map((op, i) => ({ id: `${id}o${i + 1}`, value: op.value, color: 'none' })) };
+      fields.push(field);
+      return { json: field };
+    }
+    const one = path.match(/^\/1\/customFields\/([^/]+)$/);
+    const options = path.match(/^\/1\/customFields\/([^/]+)\/options$/);
+    const option = path.match(/^\/1\/customFields\/([^/]+)\/options\/([^/]+)$/);
+    const fieldOf = (id: string | undefined) => fields.find(f => f.id === id);
+    if (one) {
+      const field = fieldOf(one[1]);
+      if (!field) return missing;
+      if (method === 'PUT') field.name = body.name;
+      if (method === 'DELETE') { fields.splice(fields.indexOf(field), 1); for (let i = items.length; i--;) if (items[i]!.idCustomField === field.id) items.splice(i, 1); }
+      return { json: field };
+    }
+    if (options && method === 'POST') {
+      const field = fieldOf(options[1]);
+      if (!field) return missing;
+      const added = { id: `${field.id}n${++sequence}`, value: body.value, color: body.color };
+      field.options.push(added);
+      return { json: added };
+    }
+    if (option && method === 'PUT') {
+      const found = fieldOf(option[1])?.options.find(x => x.id === option[2]);
+      if (!found) return missing;
+      found.value = body.value;
+      return { json: found };
+    }
+    const setItem = path.match(/^\/1\/cards\/([^/]+)\/customField\/([^/]+)\/item$/);
+    if (setItem && method === 'PUT') {
+      const [, card, field] = setItem as unknown as [string, string, string];
+      const at = items.findIndex(i => i.idModel === card && i.idCustomField === field);
+      if (at >= 0) items.splice(at, 1);
+      if (body.idValue === '') return { json: {} };
+      const item = { id: `item${++sequence}`, idCustomField: field, idValue: body.idValue as string, idModel: card };
+      items.push(item);
+      return { json: item };
+    }
+    const listItems = path.match(/^\/1\/cards\/([^/]+)\/customFieldItems$/);
+    if (listItems && method === 'GET') return { json: items.filter(i => i.idModel === listItems[1]) };
+    return undefined;
+  };
   const cards = o.cards ?? [{ id: 'a' }, { id: 'b' }];
   let sets = 0;
   const pluginId = o.pluginId === undefined ? 'plugin1' : o.pluginId;
@@ -63,9 +125,14 @@ function deps(o: Opts = {}): Fake {
       store.set(`${scope}|${vis}|${key}`, value);
     },
     remove: async (scope: string, vis: string, key: string) => { store.delete(`${scope}|${vis}|${key}`); },
-    cards: async () => (o.everythingThrows ? boom() : o.clientCards ?? cards),
+    cards: async (...asked: string[]) => {
+      if (o.everythingThrows) return boom();
+      const base = o.clientCards ?? cards;
+      if (!asked.includes('customFieldItems')) return base;
+      return (base as { id: string }[]).map(c => ({ ...c, customFieldItems: o.clientHidesItems ? [] : items.filter(i => i.idModel === c.id).map(i => ({ ...i })) }));
+    },
     lists: async () => (o.everythingThrows ? boom() : [{ id: 'l1', cards: [{ id: 'a' }] }]),
-    board: async () => (o.everythingThrows ? boom() : { id: 'board1' }),
+    board: async (...asked: string[]) => (o.everythingThrows ? boom() : { id: 'board1', ...(asked.includes('customFields') ? { customFields: o.clientHidesFields ? [] : fields.map(f => ({ id: f.id, name: f.name, type: 'list' })) } : {}) }),
     render: (fn: () => void) => { if (o.everythingThrows) boom(); renderCallbacks.push(fn); },
     showCard: async () => (o.everythingThrows ? boom() : undefined),
   } as unknown as TrelloIframe;
@@ -83,7 +150,6 @@ function deps(o: Opts = {}): Fake {
   const dropToken = () => { hasToken = false; };
   (auth as TrelloAuth & { dropToken: () => void }).dropToken = dropToken;
 
-  let optionText = 'One';
   const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
     if (o.everythingThrows) throw new TypeError('network down');
     const url = String(input);
@@ -96,14 +162,11 @@ function deps(o: Opts = {}): Fake {
     const status = hostAnswer ?? o.fetchStatus ?? 200;
     const path = new URL(url).pathname;
     let json: unknown = {};
-    if (method === 'POST' && path === '/1/customFields') {
-      json = { id: 'f1', options: [{ id: 'o1', value: { text: 'One' } }, { id: 'o2', value: { text: 'Two' } }] };
-    } else if (method === 'PUT' && path === '/1/customFields/f1/options/o1') {
-      optionText = body.value.text;
-      json = { id: 'o1', value: { text: optionText } };
-    } else if (method === 'GET' && path === '/1/customFields/f1/options/o1') {
-      json = { id: 'o1', value: { text: optionText } };
-    } else if (path === '/1/boards/board1') {
+    if (status < 300) {
+      const reply = customFieldRoutes(method, path, body);
+      if (reply) return new Response(JSON.stringify(reply.json), { status: reply.status ?? 200, headers: { 'x-rate-limit-api-token-remaining': '70' } });
+    }
+    if (path === '/1/boards/board1') {
       // Like Trello: each card lists its stored Power-Up data as one entry per Power-Up, the value a JSON string.
       const pluginData = (cardId: string) => {
         const mine: Record<string, unknown> = {};
@@ -128,7 +191,7 @@ function deps(o: Opts = {}): Fake {
 
   let tick = 0;
   return {
-    t, auth, fetch: fakeFetch, now: () => (tick += 10), store, renderCallbacks, calls, order,
+    t, auth, fetch: fakeFetch, now: () => (tick += 10), fields, items, store, renderCallbacks, calls, order,
     host: { get: () => savedHost ?? 'https://trello.com', saved: () => savedHost, set: h => { savedHost = h; } }, savedHost: () => savedHost,
     loadImage: async url => (o.imgLoadsFor ? o.imgLoadsFor(url) : o.imgLoads ?? true),
   };
@@ -160,7 +223,7 @@ test('every check has a one-line instruction, and the texts are the ones the scr
     P3: 'Press Run and allow access in the window that opens. When the row has a result, reload this page once.',
     P5: 'Press Run. Needs a card with a cover image or an image attachment.',
     P6: 'Press Run. It moves one card and puts it back.',
-    P7: 'Press Run. It adds a temporary field and removes it.',
+    P7: 'Press Run. It adds a temporary field, uses it on one card, and removes it.',
     P8: 'Press Run. It takes a few seconds.',
     P2: 'Needs a second browser window open on this board with this page (another person, or you in another window). Press Run here, then press Write ping in the other window within 90 seconds.',
     P4: 'Press Run, then close the card that opens.',
@@ -399,13 +462,14 @@ describe('P5', () => {
   });
 
   test('finds a cover that only the client data has, and passes when img works for it', async () => {
-    const d = deps({ ...clientOnly([{ url: 'https://img.example/c-small.png', width: 100 }, { url: 'https://img.example/c-600.png', width: 600 }, { url: 'https://img.example/c-big.png', width: 1200 }]), imgLoads: true });
+    const tried: string[] = [];
+    const d = deps({ ...clientOnly([{ url: 'https://img.example/c-small.png', width: 100 }, { url: 'https://img.example/c-600.png', width: 600 }, { url: 'https://img.example/c-big.png', width: 1200 }]), imgLoadsFor: url => { tried.push(url); return true; } });
     const r = await byId('P5').run(d);
     expect(r.status).toBe('pass');
     expect(r.detail.startsWith('Works: ')).toBe(true);
     expect(sectionOf(r.detail, 'Works: ')).toContain('client cover.scaled via img');
-    expect(r.detail).toContain('img.example/c-600.png');       // the largest size not wider than 600
-    expect(r.detail).not.toContain('c-big.png');
+    expect(tried).toEqual(['https://img.example/c-600.png']);   // the largest size not wider than 600
+    expect(r.detail).toContain('Candidates: client cover.scaled = img.example/<file>.png');
     expect(d.calls.some(c => c.url.endsWith('/1/cards/a/attachments?fields=id,name,url,previews,mimeType,isUpload'))).toBe(true);
   });
 
@@ -431,7 +495,9 @@ describe('P5', () => {
   });
 
   test('lists the candidates in order, one per label, from every source', async () => {
+    const tried: string[] = [];
     const d = deps({
+      imgLoadsFor: url => { tried.push(url); return true; },
       clientCards: [{ id: 'a', cover: { idAttachment: 'att2', scaled: [{ url: 'https://img.example/cs.png', width: 300 }] }, attachments: [
         { id: 'att1', url: 'https://img.example/other.png', mimeType: 'image/png', previews: [{ url: 'https://img.example/other-pv.png', width: 100 }] },
         { id: 'att2', url: 'https://img.example/dl2.png', mimeType: 'image/png', previews: [{ url: 'https://img.example/p2-300.png', width: 300 }, { url: 'https://img.example/p2-1000.png', width: 1000 }] }] }],
@@ -443,11 +509,8 @@ describe('P5', () => {
     const order = ['client cover.scaled', 'rest cover.scaled', 'client attachment preview', 'rest attachment preview', 'attachment download url'].map(l => candidates.indexOf(l));
     expect(order.every(i => i >= 0)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
-    expect(candidates).toContain('img.example/p2-300.png');
-    expect(candidates).toContain('img.example/rp2.png');
-    expect(candidates).toContain('img.example/dl2.png');           // the client's own address wins
-    expect(candidates).not.toContain('other-pv.png');              // the cover attachment is chosen by its id
-    expect(candidates).not.toContain('p2-1000.png');
+    expect(tried).toEqual(['https://img.example/cs.png', 'https://img.example/rs.png', 'https://img.example/p2-300.png', 'https://img.example/rp2.png', 'https://img.example/dl2.png']);
+    // the cover attachment is chosen by its id, the largest size not wider than 600, and the client's own download address wins
     expect(r.detail.match(/client cover\.scaled/g)?.length).toBeGreaterThan(0);
   });
 
@@ -567,13 +630,30 @@ describe('P5', () => {
     const url = 'https://trello.com/1/cards/5f3a9c1e8b7d4a2e6c1f0b3d/attachments/60A1B2C3D4E5F60718293A4B/previews/1234567/download/pic.png?sig=SECRETSIG&token=abc';
     const d = intercept(deps({ ...clientOnly([{ url }]), imgLoads: false }), u => (u.startsWith('https://trello.com/1/cards/5f3a') ? new Response(`bad credentials ${TOKEN} ${url}`, { status: 401 }) : undefined));
     const r = await byId('P5').run(d);
-    expect(r.detail).toContain('trello.com/1/cards/…/attachments/…/previews/…/download/pic.png');
+    expect(r.detail).toContain('trello.com/1/cards/…/attachments/…/previews/…/download/<file>.png');
+    expect(r.detail).not.toContain('pic');
     expect(r.detail).not.toMatch(/[0-9a-f]{16,}/i);
     expect(r.detail).not.toMatch(/\d{6,}/);
     expect(r.detail).not.toContain('SECRETSIG');
     expect(r.detail).not.toContain('?');
     expect(JSON.stringify(r)).not.toContain(TOKEN);
     expect(r.detail).not.toContain('Secret card name');
+  });
+
+  test('masks the file name in each shown path but keeps its extension', async () => {
+    const d = deps({ ...clientOnly([{ url: 'https://img.example/photos/Quarterly plan.final.JPG' }]) });
+    const r = await byId('P5').run(d);
+    expect(sectionOf(r.detail, 'Candidates: ')).toContain('img.example/photos/<file>.JPG');
+    expect(r.detail).not.toContain('Quarterly');
+    expect(r.detail).not.toContain('final');
+  });
+  test('masks a last path segment that has no extension, and keeps a masked id as it is', async () => {
+    const d = deps({ ...clientOnly([{ url: 'https://img.example/photos/original' }]) });
+    const r = await byId('P5').run(d);
+    expect(sectionOf(r.detail, 'Candidates: ')).toContain('img.example/photos/<file>');
+    expect(r.detail).not.toContain('original');
+    const id = deps({ ...clientOnly([{ url: 'https://img.example/photos/60a1b2c3d4e5f60718293a4b' }]) });
+    expect(sectionOf((await byId('P5').run(id)).detail, 'Candidates: ')).toContain('img.example/photos/…');
   });
 
   test('cuts each refusal or error text to 120 characters', async () => {
@@ -691,26 +771,182 @@ test('a refused request gives the HTTP status and the short error text, so a 401
   }
 });
 
-test('P7 creates a field, renames an option, reads it back and deletes the field', async () => {
-  const d = deps();
-  const r = await byId('P7').run(d);
-  expect(r.status).toBe('pass');
-  const create = d.calls.find(c => c.method === 'POST');
-  expect(create?.body).toMatchObject({ name: 'mxproof', display_cardFront: true, idModel: 'board1' });
-  const rename = d.calls.find(c => c.method === 'PUT');
-  expect(rename?.url).toContain('/1/customFields/f1/options/o1');
-  expect(rename?.body).toMatchObject({ value: { text: expect.any(String) } });
-  expect(d.calls.at(-1)).toMatchObject({ method: 'DELETE' });
-  expect(d.calls.at(-1)?.url).toContain('/1/customFields/f1');
-});
-test('P7 still deletes the field when the rename fails', async () => {
-  const d = deps();
-  const real = d.fetch;
-  d.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
-    init?.method === 'PUT' ? new Response('nope', { status: 400 }) : real(input, init)) as typeof fetch;
-  const r = await byId('P7').run(d);
-  expect(r.status).toBe('fail');
-  expect(d.calls.some(c => c.method === 'DELETE' && c.url.includes('/1/customFields/f1'))).toBe(true);
+describe('P7', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const BY_HAND = 'The field mxproof could not be removed: delete it by hand (board menu, Custom Fields).';
+  const clocked = (o: Opts = {}): Fake => ({ ...deps(o), now: () => Date.now() });
+  const run = async (d: Fake) => {
+    const running = byId('P7').run(d);
+    await vi.runAllTimersAsync();
+    return running;
+  };
+  const lines = (r: CheckResult) => r.detail.split(' | ');
+  const line = (r: CheckResult, prefix: string) => lines(r).find(l => l.startsWith(prefix));
+  const pathOf = (url: string) => new URL(url).pathname;
+  const sent = (d: Fake, method: string, path: string | RegExp) =>
+    d.calls.filter(c => c.method === method && (typeof path === 'string' ? pathOf(c.url) === path : path.test(pathOf(c.url))));
+  /** Answers the matching requests itself (a status and a short text); everything else goes to the usual fake. */
+  const refuse = (d: Fake, method: string, path: RegExp, status: number, text: string) =>
+    intercept(d, (url, init) => ((init?.method ?? 'GET') === method && path.test(pathOf(url)) ? new Response(text, { status }) : undefined));
+  const STEPS = [
+    'find: ok', 'create: ok', 'client sees field: seen after', 'rename option: ok', 'rename option read back: ok',
+    'rename field: ok', 'rename field read back: ok', 'rename field back: ok', 'rename field back read back: ok',
+    'set on card: ok', 'set on card read back: ok', 'client sees card value: seen after', 'clear on card: ok', 'clear on card read back: ok',
+    'delete: ok', 'delete read back: ok',
+  ];
+
+  test('has the new title, and is still a write check', async () => {
+    expect(byId('P7').title).toBe('Dropdown fields: create, rename, set on a card, delete');
+    expect((await import('../../src/proof/checks')).writeCheckIds).toContain('P7');
+  });
+
+  test('on a clean board every step passes, in order, and nothing is left behind', async () => {
+    const d = clocked();
+    const r = await run(d);
+    expect(r.status).toBe('pass');
+    const at = STEPS.map(step => lines(r).findIndex(l => l.startsWith(step)));
+    expect(at.every(i => i >= 0)).toBe(true);
+    expect([...at].sort((x, y) => x - y)).toEqual(at);
+    expect(sent(d, 'POST', '/1/customFields')).toHaveLength(1);
+    expect(sent(d, 'POST', '/1/customFields')[0]?.body).toMatchObject({ name: 'mxproof', type: 'list', idModel: 'board1', display_cardFront: true });
+    expect(sent(d, 'PUT', '/1/customFields/f1/options/f1o1')[0]?.body).toEqual({ value: { text: 'mxproof-renamed' } });
+    expect(sent(d, 'PUT', '/1/customFields/f1').map(c => c.body)).toEqual([{ name: 'mxproof2' }, { name: 'mxproof' }]);
+    expect(sent(d, 'PUT', '/1/cards/a/customField/f1/item').map(c => c.body)).toEqual([{ idValue: 'f1o1' }, { idValue: '', value: '' }]);
+    expect(sent(d, 'DELETE', '/1/customFields/f1')).toHaveLength(1);
+    expect(d.fields).toEqual([]);
+    expect(d.items).toEqual([]);
+    expect(r.detail).toContain('REST host: https://trello.com');
+    expect(sent(d, 'GET', '/1/customFields/f1')[0]?.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  test('reuses a leftover field: no POST, says so, and removes it at the end', async () => {
+    const d = clocked({ leftoverField: { options: 2 } });
+    const r = await run(d);
+    expect(r.status).toBe('pass');
+    expect(line(r, 'create:')).toBe('create: skipped, reusing a leftover field');
+    expect(sent(d, 'POST', '/1/customFields')).toEqual([]);
+    expect(line(r, 'client sees field:')).toMatch(/^client sees field: already present \(customField keys \[/);
+    expect(sent(d, 'DELETE', '/1/customFields/fOld')).toHaveLength(1);
+    expect(d.fields).toEqual([]);
+  });
+
+  test('adds the missing option to a leftover that has only one', async () => {
+    const d = clocked({ leftoverField: { options: 1 } });
+    const r = await run(d);
+    expect(r.status).toBe('pass');
+    const add = sent(d, 'POST', '/1/customFields/fOld/options');
+    expect(add).toHaveLength(1);
+    expect(add[0]?.body).toEqual({ value: { text: 'Two' }, color: 'none', pos: 'bottom' });
+    expect(line(r, 'add option:')).toBe('add option: ok');
+  });
+
+  test('a refused option rename fails the check, but later steps and the delete still run', async () => {
+    const d = refuse(clocked(), 'PUT', /\/options\//, 404, 'invalid id');
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'rename option:')).toBe('rename option: HTTP 404 invalid id');
+    for (const step of ['set on card: ok', 'set on card read back: ok', 'clear on card: ok', 'delete: ok', 'delete read back: ok']) expect(line(r, step)).toBeDefined();
+    expect(sent(d, 'DELETE', '/1/customFields/f1')).toHaveLength(1);
+    expect(d.fields).toEqual([]);
+  });
+
+  test('says when the renamed option text is not there on reading back', async () => {
+    const d = intercept(clocked(), (url, init) => (init?.method === 'PUT' && /\/options\//.test(url) ? new Response('{}', { status: 200 }) : undefined));
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'rename option:')).toBe('rename option: ok');
+    expect(line(r, 'rename option read back:')).toMatch(/^rename option read back: .*not/);
+  });
+
+  test('a refused set on card fails the check and is reported; the delete still runs', async () => {
+    const d = refuse(clocked(), 'PUT', /\/customField\/f1\/item$/, 400, 'invalid value for idValue');
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'set on card:')).toBe('set on card: HTTP 400 invalid value for idValue');
+    expect(line(r, 'client sees card value:')).toMatch(/^client sees card value: skipped/);
+    expect(line(r, 'delete: ok')).toBeDefined();
+    expect(d.fields).toEqual([]);
+  });
+
+  test('a set that does not read back fails the check', async () => {
+    const d = intercept(clocked(), (url, init) => (init?.method === 'PUT' && /\/customField\/f1\/item$/.test(url) && !JSON.parse(String(init.body)).value && JSON.parse(String(init.body)).idValue ? new Response('{}') : undefined));
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'set on card read back:')).toMatch(/^set on card read back: .*not/);
+  });
+
+  test('when the Power-Up\'s own data never shows the value, it says so, and the status comes from the REST steps alone', async () => {
+    const d = clocked({ clientHidesItems: true });
+    const r = await run(d);
+    expect(r.status).toBe('pass');
+    expect(line(r, 'client sees card value:')).toContain('not seen within 6 s');
+  });
+  test('polls the client data every 250 ms, and reports the key names of the first item it sees', async () => {
+    let looks = 0;
+    const d = clocked();
+    const real = d.t.cards;
+    d.t.cards = (async (...asked: string[]) => {
+      if (!asked.includes('customFieldItems')) return real(...asked);
+      looks++;
+      return looks < 4 ? [{ id: 'a', customFieldItems: [{ idCustomField: 'other', idValue: 'v', id: 'i', secret: 'x' }] }] : real(...asked);
+    }) as typeof d.t.cards;
+    const r = await run(d);
+    expect(looks).toBe(4);
+    expect(line(r, 'client sees card value:')).toMatch(/^client sees card value: seen after 750 ms/);
+    expect(line(r, 'client sees card value:')).toContain('customFieldItem keys [id, idCustomField, idValue, secret]');
+  });
+  test('says when the field does not show in the Power-Up\'s own board data', async () => {
+    const r = await run(clocked({ clientHidesFields: true }));
+    expect(r.status).toBe('pass');
+    expect(line(r, 'client sees field:')).toContain('not seen within 6 s');
+  });
+
+  test('a refused delete fails the check and ends with the by-hand sentence', async () => {
+    const d = refuse(clocked(), 'DELETE', /^\/1\/customFields\/f1$/, 500, 'nope');
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'delete:')).toBe('delete: HTTP 500 nope');
+    expect(r.detail.endsWith(BY_HAND)).toBe(true);
+  });
+  test('a delete that is accepted but leaves the field fails the check too', async () => {
+    const d = intercept(clocked(), (url, init) => (init?.method === 'DELETE' ? new Response('{}') : undefined));
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(r.detail.endsWith(BY_HAND)).toBe(true);
+  });
+
+  test('an error thrown in the middle is reported and the delete still runs', async () => {
+    const d = clocked();
+    const real = d.t.cards;
+    d.t.cards = (async (...asked: string[]) => { if (asked.length === 1) throw new Error('boom'); return real(...asked); }) as typeof d.t.cards;
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'set on card:')).toBe('set on card: boom');
+    expect(sent(d, 'DELETE', '/1/customFields/f1')).toHaveLength(1);
+    expect(d.fields).toEqual([]);
+  });
+
+  test('a refused find still tries to create, and reports a duplicate', async () => {
+    const d = refuse(clocked({ leftoverField: { options: 2 } }), 'GET', /^\/1\/boards\/board1\/customFields$/, 401, 'unauthorized permission requested');
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'find:')).toBe('find: HTTP 401 unauthorized permission requested');
+    expect(line(r, 'create:')).toMatch(/^create: HTTP 409 .*CUSTOM_FIELD_DUPLICATE_FIELD/);
+    for (const step of ['rename option', 'set on card', 'clear on card']) expect(line(r, `${step}:`)).toMatch(/^[a-z ]+: skipped/);
+  });
+
+  test('the token never appears, even when Trello echoes it, and no request carries key= or token=', async () => {
+    const d = intercept(clocked(), (url, init) => (init?.method === 'PUT' && /\/options\//.test(url) ? new Response(`bad credentials ${TOKEN}`, { status: 401 }) : undefined));
+    const r = await run(d);
+    expect(JSON.stringify(r)).not.toContain(TOKEN);
+    expect(r.detail).toContain('[token]');
+    for (const c of d.calls) {
+      expect(new URL(c.url).searchParams.has('key')).toBe(false);
+      expect(new URL(c.url).searchParams.has('token')).toBe(false);
+    }
+  });
 });
 
 describe('P8', () => {
