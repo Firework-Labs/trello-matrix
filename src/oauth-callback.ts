@@ -1,7 +1,6 @@
 import { CLIENT_ID, REDIRECT_URI } from './config';
-import { finishSignIn } from './trello/callback';
+import { runCallbackPage, type CallbackEnv } from './trello/callback';
 
 window.addEventListener('load', () => {
-  const line = document.getElementById('status');
-  void finishSignIn(TrelloPowerUp, { clientId: CLIENT_ID, redirectUri: REDIRECT_URI }, text => { if (line) line.textContent = text; });
+  void runCallbackPage({ window: window as unknown as CallbackEnv['window'], document, options: { clientId: CLIENT_ID, redirectUri: REDIRECT_URI } });
 });

@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, vi } from 'vitest';
-import { CALLBACK_FAILED, CALLBACK_WORKING, finishSignIn } from '../../src/trello/callback';
+import { CALLBACK_FAILED, CALLBACK_WORKING, finishSignIn, runCallbackPage } from '../../src/trello/callback';
 
 const OPTIONS = { clientId: 'client1', redirectUri: 'https://example.test/base/oauth-callback.html' };
 
@@ -36,9 +37,46 @@ test('shows the failure text when redirectUriCallback rejects, or the iframe can
     expect(texts.at(-1)).toBe(CALLBACK_FAILED);
   }
 });
+function page(powerUp: unknown) {
+  const line = { textContent: CALLBACK_WORKING as string | null };
+  const asked: string[] = [];
+  const env = {
+    window: { TrelloPowerUp: powerUp } as never,
+    document: { getElementById: (id: string) => { asked.push(id); return id === 'status' ? line : null; } },
+    options: OPTIONS,
+  };
+  return { env, line, asked };
+}
+
+test('the page: with the library missing the status line shows the failure text instead of staying on "Finishing sign-in…"', async () => {
+  for (const missing of [undefined, null]) {
+    const p = page(missing);
+    await runCallbackPage(p.env);
+    expect(p.line.textContent).toBe(CALLBACK_FAILED);
+  }
+});
+test('the page: with the library present the status line follows the sign-in, and a missing status line is no problem', async () => {
+  const callback = vi.fn(async () => undefined);
+  const ok = page(fakePowerUp(callback).powerUp);
+  await runCallbackPage(ok.env);
+  expect(ok.asked).toEqual(['status']);
+  expect(callback).toHaveBeenCalledTimes(1);
+  expect(ok.line.textContent).toBe(CALLBACK_WORKING);
+  const failing = page(fakePowerUp(() => { throw new Error('x'); }).powerUp);
+  await runCallbackPage(failing.env);
+  expect(failing.line.textContent).toBe(CALLBACK_FAILED);
+  const noLine = page(fakePowerUp(callback).powerUp);
+  noLine.env.document.getElementById = () => null;
+  await expect(runCallbackPage(noLine.env)).resolves.toBeUndefined();
+});
 test('never logs anything', async () => {
   const spies = (['log', 'warn', 'error', 'info', 'debug'] as const).map(m => vi.spyOn(console, m).mockImplementation(() => undefined));
   await finishSignIn(fakePowerUp(() => { throw new Error('secret'); }).powerUp, OPTIONS, () => undefined);
   for (const s of spies) expect(s).not.toHaveBeenCalled();
   vi.restoreAllMocks();
+});
+
+test('the redirect page tells the browser not to send the address it was opened with on to anyone', () => {
+  const html = readFileSync(new URL('../../oauth-callback.html', import.meta.url), 'utf8');
+  expect(html).toMatch(/<meta\s+name="referrer"\s+content="no-referrer"\s*\/?>/);
 });

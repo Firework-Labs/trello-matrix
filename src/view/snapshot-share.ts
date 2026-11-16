@@ -18,8 +18,8 @@ function keepPlacements(prev: BoardSnapshot['placements'], next: BoardSnapshot['
 /**
  * The snapshot just read, built to share everything that did not change with the one on screen: a list, card or placement
  * that is equal keeps its old identity, and the snapshot itself is the old one when nothing differs. The view redraws
- * by identity, so a snapshot that only repeats what is shown (the echo of this person's own write, or a poll that found
- * nothing new) touches nothing.
+ * by identity, so a snapshot that only repeats what is shown (the echo of this person's own write, or a render notice
+ * after which the board turned out to be unchanged) touches nothing.
  */
 export function shareUnchanged(prev: BoardSnapshot, next: BoardSnapshot): BoardSnapshot {
   const merged: BoardSnapshot = {

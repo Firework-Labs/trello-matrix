@@ -366,7 +366,9 @@ export function createTrelloStore(o: {
 
     setLevel(cardId, param, level) {
       return own(async () => {
-        const { card } = await requireCard(cardId);
+        const { snap, card } = await requireCard(cardId);
+        // The parameter may have been removed since the view built it; a value written for a field nobody plots is a stray write.
+        if (!snap.parameters.some(p => p.fieldId === param.fieldId)) throw invalid('That parameter is no longer on the board.');
         const optionId = level === null ? null : Number.isInteger(level) ? param.optionIds[level] : undefined;
         if (optionId === undefined) throw invalid('That level does not exist.');
         const was = Object.hasOwn(card.fieldOptions, param.fieldId) ? (card.fieldOptions[param.fieldId] ?? null) : null;
@@ -383,7 +385,8 @@ export function createTrelloStore(o: {
         const id = currentBoardId();
         // The list must still have room for the entry, or the field would be made and then could not be added.
         assertFits([...decodeParams(await getKey('board', 'shared', KEY_PARAMS)), LARGEST_PARAM_ENTRY]);
-        // Sent once, never retried here: a second field would be left on the shared board.
+        // Sent once from here, never again after a failure: a second field would be left on the shared board. (The REST client
+        // does repeat a request Trello refused with 429 after a wait; that refusal means nothing was applied.)
         const field = await step(async () => {
           const made = await call(() => rest.createDropdownField(id, name, levels)).catch(e => {
             const error = restError(e);

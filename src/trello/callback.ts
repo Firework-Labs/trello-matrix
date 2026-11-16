@@ -18,3 +18,19 @@ export async function finishSignIn(
     setText(CALLBACK_FAILED);
   }
 }
+
+/** The real parts of the redirect page, as `src/oauth-callback.ts` passes them in (and a test replaces them). */
+export interface CallbackEnv {
+  window: { TrelloPowerUp?: { iframe(options: CallbackOptions): TrelloIframe } | null };
+  document: { getElementById(id: string): { textContent: string | null } | null };
+  options: CallbackOptions;
+}
+
+/** Runs the redirect page. When Trello's library did not load there is nothing to finish the sign-in with, and the page says so. */
+export async function runCallbackPage(env: CallbackEnv): Promise<void> {
+  const line = env.document.getElementById('status');
+  const show = (text: string) => { if (line) line.textContent = text; };
+  const powerUp = env.window.TrelloPowerUp;
+  if (!powerUp || typeof powerUp.iframe !== 'function') { show(CALLBACK_FAILED); return; }
+  await finishSignIn(powerUp, env.options, show);
+}

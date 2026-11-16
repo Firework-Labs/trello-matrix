@@ -110,7 +110,7 @@ function makeT(w: World): TrelloIframe {
     async lists() { return structuredClone(w.lists) as never; },
     async board() { return structuredClone(w.board) as never; },
     getContext: () => ({ board: 'b1', member: 'm1', permissions: w.permissions }),
-    async modal() {}, async closeModal() {},
+    async modal() {},
     async showCard(id) { w.shown.push(id); },
     render(fn) { w.renderFns.push(fn); },
     arg: () => undefined,
@@ -460,6 +460,22 @@ describe('setLevel', () => {
       expect(await error(st.setLevel('c1', param, level))).toMatchObject({ kind: 'invalid', message: 'That level does not exist.' });
     }
     noWrites(w, rest);
+  });
+
+  test('a parameter that is no longer on the board rejects as invalid without a request', async () => {
+    const { w, rest, st } = setup();
+    const param = paramNamed(await st.load(), 'f1');
+    await st.removeParameter('f1');                                   // the other person (or an earlier step) removed it
+    w.ops.length = 0;
+    expect(await error(st.setLevel('c1', param, 0))).toMatchObject({ kind: 'invalid', message: 'That parameter is no longer on the board.' });
+    expect(await error(st.setLevel('c1', param, null))).toMatchObject({ kind: 'invalid', message: 'That parameter is no longer on the board.' });
+    const stranger: Parameter = { ...param, id: 'nope', fieldId: 'f-nope' };
+    expect(await error(st.setLevel('c1', stranger, 0))).toMatchObject({ kind: 'invalid', message: 'That parameter is no longer on the board.' });
+    noWrites(w, rest);
+    expect(cardIn(await st.load(), 'c1').fieldOptions).toEqual({ f1: 'oMed' });
+    await st.linkParameter('f1', 'last');                             // linked again: writes are accepted again
+    await st.setLevel('c1', paramNamed(await st.load(), 'f1'), 2);
+    expect(rest.calls).toHaveLength(1);
   });
 
   test('a failed request rejects with its error and leaves the shown value alone', async () => {
