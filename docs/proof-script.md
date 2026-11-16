@@ -28,11 +28,18 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 1. **Person A: press Run on P1.** Wait for the result. It should say `pass`.
    - If it says `fail`, stop. Copy the results (step 13) and send them back
      now. Do not carry on.
-2. **Person A: press Run on P3.** A Trello window asks you to allow access.
-   Press **Allow**. The row says `manual`, and that is expected.
+   - The checks that talk to Trello over the web (P5 to P8) need P3 first.
+     If one says "Not signed in. Run P3 first.", do step 2 and then run it
+     again.
+2. **Person A: press Run on P3.** A Trello or Atlassian window asks you to
+   allow access. Press **Allow**. After you allow, the small window closes by
+   itself. (If it stays open, leave it and tell us.) Then the page asks
+   Trello a first question, which takes a moment. The row should say `pass`
+   and name the Trello address or addresses that worked. If it says `fail`,
+   that is a useful answer too: carry on.
 3. **Person A: reload the page** (the browser's reload button, or Cmd+R).
-   After a moment, P3 shows a result. It should say `pass`. Your earlier
-   results stay in the table.
+   After a moment, P3 shows a result that adds whether you are still signed in.
+   It should say `pass`. Your earlier results stay in the table.
    - If a window asks you to allow access again, that is itself the answer;
      allow it and carry on.
 4. **Person A: press Run on P5.** It needs a card with a cover image. If the
@@ -75,7 +82,8 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 ## What to send back
 
 **Both pastes**: one from Chrome, one from Safari, plus anything odd you
-noticed. The results do not contain any password or token.
+noticed. The results do not contain any password or token. They do say which
+Trello address worked, and any error Trello gave.
 
 ## After the checks
 

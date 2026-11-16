@@ -16,8 +16,8 @@ prioritising a backlog. Static site, no server, all data in Trello.
 - The agent writes to a Trello board only if `.claude/handoff.json` names it.
   Never enable the Power-Up on the real `67-Pass-Play-Teamwork` board; Mike
   does that.
-- The Power-Up API key is public by design. Tokens and secrets are never
-  committed, logged or written to a file.
+- The OAuth 2.0 client ID is public by design. Access tokens, refresh tokens
+  and any client secret are never committed, logged or written to a file.
 - Never delete a Custom Field or a field value except through an explicit
   drop on a strip or the tray, as the design describes.
 - Escape closes Trello's modal. Do not bind it.
@@ -39,6 +39,8 @@ prioritising a backlog. Static site, no server, all data in Trello.
 - `src/view/` the matrix (`app.ts` mounts it on any `BoardStore`).
 - `src/proof/` the live-check page Mike runs against a test board (P1 to P8).
 - `src/connector.ts` the Power-Up entry (board button, card button).
+- `src/trello/auth.ts` OAuth 2.0 sign-in (public client) and the Bearer header;
+  `src/oauth-callback.ts` is the redirect page Trello sends the person back to.
 - `dev.html` runs the matrix on sample data: `npm run dev`, then open
   `http://localhost:5173/trello-matrix/dev.html`.
 

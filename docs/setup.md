@@ -36,25 +36,36 @@ Words used here:
 5. Open the new Power-Up, then **Capabilities**. Turn on:
    - **Board buttons**
    - **Card buttons**
-6. Open **API key**. Press **Generate a new API key**. Trello shows an
-   **API key** and a **Secret**.
-   - The **API key** is public by design. You can paste it into GitHub.
-   - **Never copy the Secret anywhere.** Leave it where it is.
-7. Under **Allowed origins** on that same page, add exactly:
-   `https://firework-labs.github.io`
-   and save.
+6. Still in the Power-Up, open the **OAuth 2.0** tab. Set it up like this:
+   - Set the **security type** to **Public**. (A Public client has no secret.
+     That is what this site needs, because it has no server to keep a secret
+     on.)
+   - Add a **callback URL**, exactly, with nothing before or after it:
+     `https://firework-labs.github.io/trello-matrix/oauth-callback.html`
+   - Make sure the scopes `read:board:trello` and `write:board:trello` are
+     ticked.
+   - Press **Save**.
+7. Copy the **Client ID** shown on that tab. You will paste it into GitHub in
+   Part 3. The Client ID is public by design, so pasting it there is fine.
+   - There is **no secret to copy** for a Public client. If the page shows a
+     secret anyway, do **not** copy it anywhere: not into GitHub, not into a
+     message to us.
+8. If the tab or a field is named differently from these steps (Trello may move
+   things), send the agent a screenshot instead of guessing.
 
-## Part 3: Tell GitHub the key (you)
+## Part 3: Tell GitHub the Client ID (you)
 
 1. In the repository go to **Settings**, then **Secrets and variables**, then
    **Actions**, then the **Variables** tab (not "Secrets").
 2. Press **New repository variable** and add:
-   - Name `TRELLO_APP_KEY`, value: the API key from Part 2, step 6.
+   - Name `TRELLO_CLIENT_ID`, value: the Client ID from Part 2, step 7.
    - Name `PROOF`, value: `1`
      (This adds a "Matrix checks" button to the board. It is for the first
      test only. We will remove it later.)
 3. Go to the **Actions** tab. If the first publish already ran before you added
    the variables, open it and press **Re-run all jobs**. Wait for a green tick.
+   (If the publish does not run again, open **Publish to GitHub Pages** in the
+   Actions tab and press **Run workflow**.)
 
 ## Part 4: A test board (you)
 
@@ -78,12 +89,23 @@ Do the checks on a copy, never on the real board.
 Follow `docs/proof-script.md`. It needs a second person logged in to Trello,
 about ten minutes, in Chrome and then in Safari. Send both results back.
 
+About signing in: each person allows access once, in a small Trello (or
+Atlassian) window. Trello may ask again after 90 days without use. Each person
+needs a Trello account that is linked to an Atlassian account.
+
 ## If something goes wrong
 
 - **No Matrix button on the board**: check the connector URL in Part 2 step 3
   has no typing mistake, and that Pages shows the site as published.
 - **Page not found at the connector URL**: Part 1 step 5 was missed, or the
   publish has not finished. Check the Actions tab.
-- **"Matrix checks" opens but says something about the key**: the
-  `TRELLO_APP_KEY` variable is missing or wrong, or the allowed origin in
-  Part 2 step 7 is missing. After fixing, re-run the publish.
+- **"Matrix checks" opens but the page says it was built without a Trello
+  client ID**: the `TRELLO_CLIENT_ID` variable is missing or has a typing
+  mistake. After fixing it, re-run the publish.
+- **The sign-in window shows an error about the redirect or callback
+  address**: the callback URL in Part 2 step 6 does not match exactly. Check
+  for a missing `https://`, a stray space, or a missing `oauth-callback.html`
+  at the end. Save, then try again.
+- **The sign-in window stays open with a message that sign-in could not be
+  finished**: close it and try again. If it keeps happening, send the agent a
+  screenshot of the window.

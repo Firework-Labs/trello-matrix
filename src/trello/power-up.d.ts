@@ -5,12 +5,16 @@ type TrelloVisibility = 'shared' | 'private';
 
 interface TrelloContext { board: string; card?: string; member: string; [key: string]: unknown }
 
-interface TrelloRestApi {
-  isAuthorized(): Promise<boolean>;
-  authorize(opts: { scope: string; expiration: string; [key: string]: unknown }): Promise<string>;
-  getToken(): Promise<string | null>;
-  clearToken(): Promise<void>;
+interface TrelloOAuth2Client {
+  /** Opens the consent window. The documentation does not say what it resolves with, so treat it as unknown. */
+  authorize(opts: { scopes: string[] }): Promise<unknown>;
+  /** The access token, or null when the person must authorise again. The library refreshes it itself. */
+  getAccessToken(): Promise<string | null>;
+  /** Called on the redirect page once the window has loaded. */
+  redirectUriCallback(): unknown;
 }
+
+interface TrelloPowerUpOptions { clientId: string; redirectUri: string }
 
 interface TrelloModalOptions {
   url: string;
@@ -40,7 +44,7 @@ interface TrelloIframe {
   render(fn: () => void | Promise<void>): void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   arg(name: string, defaultValue?: any): any;
-  getRestApi(): TrelloRestApi;
+  getOAuth2ApiClient(): TrelloOAuth2Client;
 }
 
 interface TrelloButton {
@@ -56,6 +60,6 @@ interface TrelloCapabilities {
 }
 
 declare const TrelloPowerUp: {
-  initialize(capabilities: TrelloCapabilities, options?: { appKey: string; appName: string }): void;
-  iframe(options?: { appKey: string; appName: string }): TrelloIframe;
+  initialize(capabilities: TrelloCapabilities, options: TrelloPowerUpOptions): void;
+  iframe(options: TrelloPowerUpOptions): TrelloIframe;
 };

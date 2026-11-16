@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { checks, p3AfterReload, p4Closed, p4Survived, writePing } from '../../src/proof/checks';
-import type { CheckDeps } from '../../src/proof/checks';
+import type { CheckDeps, RestHost } from '../../src/proof/checks';
+import type { TrelloAuth } from '../../src/trello/auth';
 
 const TOKEN = 'secret-token-123';
 
@@ -10,7 +11,14 @@ interface Opts {
   imgLoads?: boolean;
   fetchStatus?: number;
   everythingThrows?: boolean;
-  authorized?: boolean;
+  /** The person is signed in (a token exists) from the start. Default true. */
+  signedIn?: boolean;
+  /** The sign-in window is declined: authorize() rejects and no token results. */
+  declines?: boolean;
+  /** What each REST host answers to every request: a status, or 'network' for a CORS or network error. Default 200. */
+  hostStatus?: Partial<Record<RestHost, number | 'network'>>;
+  /** The host remembered from an earlier P3 in this tab. */
+  savedHost?: RestHost;
   coverUrl?: string;
   /** The Power-Up's id in `t.getContext().plugin`: a string, or null for a context that has none. Default 'plugin1'. */
   pluginId?: string | null;
@@ -22,14 +30,15 @@ interface Opts {
   failSetsAfter?: number;
 }
 interface Call { method: string; url: string; headers: Record<string, string>; body: unknown }
-type Fake = CheckDeps & { store: Map<string, unknown>; renderCallbacks: (() => void)[]; calls: Call[]; order: string[] };
+type Fake = CheckDeps & { store: Map<string, unknown>; renderCallbacks: (() => void)[]; calls: Call[]; order: string[]; savedHost: () => RestHost };
 
 function deps(o: Opts = {}): Fake {
   const store = new Map<string, unknown>();
   const renderCallbacks: (() => void)[] = [];
   const calls: Call[] = [];
   const order: string[] = [];   // which Trello client calls happened, in order
-  let authorized = o.authorized ?? true;
+  let hasToken = o.signedIn ?? true;
+  let savedHost: RestHost = o.savedHost ?? 'https://trello.com';
   const boom = (): never => { throw new Error('boom'); };
   const cards = o.cards ?? [{ id: 'a' }, { id: 'b' }];
   let sets = 0;
@@ -51,16 +60,20 @@ function deps(o: Opts = {}): Fake {
     board: async () => (o.everythingThrows ? boom() : { id: 'board1' }),
     render: (fn: () => void) => { if (o.everythingThrows) boom(); renderCallbacks.push(fn); },
     showCard: async () => (o.everythingThrows ? boom() : undefined),
-    getRestApi: () => {
-      if (o.everythingThrows) boom();
-      return {
-        isAuthorized: async () => { order.push('isAuthorized'); return authorized; },
-        authorize: async () => { order.push('authorize'); authorized = true; return TOKEN; },
-        getToken: async () => (authorized ? TOKEN : null),
-        clearToken: async () => { authorized = false; },
-      };
-    },
   } as unknown as TrelloIframe;
+  const auth: TrelloAuth = {
+    authorize: () => {
+      order.push('authorize');
+      if (o.everythingThrows) return Promise.reject(new Error('boom'));
+      if (o.declines) return Promise.reject(new Error('Trello gave no access token. The sign-in was declined or did not finish.'));
+      hasToken = true;
+      return Promise.resolve();
+    },
+    accessToken: async () => { order.push('accessToken'); return o.everythingThrows ? boom() : hasToken ? TOKEN : null; },
+    isAuthorized: async () => hasToken,
+  };
+  const dropToken = () => { hasToken = false; };
+  (auth as TrelloAuth & { dropToken: () => void }).dropToken = dropToken;
 
   let optionText = 'One';
   const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -69,7 +82,10 @@ function deps(o: Opts = {}): Fake {
     const method = init?.method ?? 'GET';
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ method, url, headers: (init?.headers ?? {}) as Record<string, string>, body });
-    const status = o.fetchStatus ?? 200;
+    const host = new URL(url).origin as RestHost;
+    const hostAnswer = o.hostStatus?.[host];
+    if (hostAnswer === 'network') throw new TypeError('Failed to fetch');
+    const status = hostAnswer ?? o.fetchStatus ?? 200;
     const path = new URL(url).pathname;
     let json: unknown = {};
     if (method === 'POST' && path === '/1/customFields') {
@@ -97,12 +113,13 @@ function deps(o: Opts = {}): Fake {
       const pos = new URL(url).searchParams.get('pos');
       json = { id: 'a', pos: pos === 'top' ? 1 : pos === 'bottom' ? 9999 : pos ? Number(pos) : 2048 };
     }
-    return new Response(JSON.stringify(json), { status, headers: { 'x-rate-limit-api-token-remaining': '70' } });
+    return new Response(status < 300 ? JSON.stringify(json) : status === 401 ? 'unauthorized permission requested' : 'nope', { status, headers: { 'x-rate-limit-api-token-remaining': '70' } });
   }) as typeof fetch;
 
   let tick = 0;
   return {
-    t, fetch: fakeFetch, key: 'KEY', now: () => (tick += 10), store, renderCallbacks, calls, order,
+    t, auth, fetch: fakeFetch, now: () => (tick += 10), store, renderCallbacks, calls, order,
+    host: { get: () => savedHost, set: h => { savedHost = h; } }, savedHost: () => savedHost,
     loadImage: async () => o.imgLoads ?? true,
   };
 }
@@ -135,25 +152,92 @@ test('P1 fails when the value does not read back', async () => {
   expect((await byId('P1').run(d)).status).toBe('fail');
 });
 
-test('P3 asks for a reload after authorising, and does not claim a pass yet', async () => {
-  const d = deps({ authorized: false });
-  const r = await byId('P3').run(d);
-  expect(r).toMatchObject({ status: 'manual', detail: expect.stringContaining('authorised now: yes') });
-});
-test('P3 after reload passes when the saved marker is there and the token is still good', async () => {
-  const d = deps({ authorized: false });
-  await byId('P3').run(d);
-  expect(await p3AfterReload(d)).toMatchObject({ id: 'P3', status: 'pass' });
-});
+const API_HOST: RestHost = 'https://api.trello.com';
+const TRELLO_HOST: RestHost = 'https://trello.com';
+const probes = (d: Fake) => d.calls.filter(c => c.url.includes('/1/boards/board1?fields=name'));
+
 test('P3 calls authorize first, before anything is awaited, and even when a token exists', async () => {
-  const d = deps({ authorized: true });
+  const d = deps({ signedIn: true });
+  const running = byId('P3').run(d);
+  expect(d.order).toEqual(['authorize']);
+  await running;
+});
+test('P3 passes when only trello.com answers 200, names it, and remembers it', async () => {
+  const d = deps({ signedIn: false, hostStatus: { [API_HOST]: 401 } });
+  const r = await byId('P3').run(d);
+  expect(r.status).toBe('pass');
+  expect(r.detail).toContain('token received: yes');
+  expect(r.detail).toContain(`${API_HOST}: HTTP 401`);
+  expect(r.detail).toContain(`${TRELLO_HOST}: HTTP 200`);
+  expect(r.detail).toContain(`hosts that worked: ${TRELLO_HOST}`);
+  expect(r.detail).not.toContain(`hosts that worked: ${API_HOST}`);
+  expect(d.savedHost()).toBe(TRELLO_HOST);
+});
+test('P3 passes when only api.trello.com answers 200, and remembers it', async () => {
+  const d = deps({ hostStatus: { [TRELLO_HOST]: 'network' } });
+  const r = await byId('P3').run(d);
+  expect(r.status).toBe('pass');
+  expect(r.detail).toContain(`${TRELLO_HOST}: network error: Failed to fetch`);
+  expect(r.detail).toContain(`hosts that worked: ${API_HOST}.`);
+  expect(d.savedHost()).toBe(API_HOST);
+});
+test('P3 passes when both hosts answer 200, names both, and prefers api.trello.com', async () => {
+  const d = deps({ savedHost: TRELLO_HOST });
+  const r = await byId('P3').run(d);
+  expect(r.status).toBe('pass');
+  expect(r.detail).toContain(`hosts that worked: ${API_HOST}, ${TRELLO_HOST}`);
+  expect(d.savedHost()).toBe(API_HOST);
+});
+test('P3 asks for the board name from both hosts with the Bearer header and no key or token in the address', async () => {
+  const d = deps();
   await byId('P3').run(d);
-  expect(d.order[0]).toBe('authorize');
+  expect(probes(d).map(c => c.url)).toEqual([`${API_HOST}/1/boards/board1?fields=name`, `${TRELLO_HOST}/1/boards/board1?fields=name`]);
+  for (const c of probes(d)) expect(c.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+});
+test('P3 fails when neither host answers 200, with both answers in the detail, and keeps the old host', async () => {
+  const d = deps({ savedHost: TRELLO_HOST, hostStatus: { [API_HOST]: 'network', [TRELLO_HOST]: 401 } });
+  const r = await byId('P3').run(d);
+  expect(r.status).toBe('fail');
+  expect(r.detail).toContain(`${API_HOST}: network error: Failed to fetch`);
+  expect(r.detail).toContain(`${TRELLO_HOST}: HTTP 401 unauthorized permission requested`);
+  expect(d.savedHost()).toBe(TRELLO_HOST);
+});
+test('P3 fails when no token results, and makes no request', async () => {
+  const d = deps({ signedIn: false, declines: true });
+  const r = await byId('P3').run(d);
+  expect(r.status).toBe('fail');
+  expect(r.detail).toContain('declined');
+  expect(d.calls).toEqual([]);
+});
+test('P3 fails when authorize resolves but there is still no token, and makes no request', async () => {
+  const d = deps({ signedIn: false });
+  d.auth.authorize = async () => undefined;
+  const r = await byId('P3').run(d);
+  expect(r).toMatchObject({ status: 'fail', detail: expect.stringContaining('token received: no') });
+  expect(d.calls).toEqual([]);
+});
+test('P3 leaves a marker for the next page load only when a token resulted', async () => {
+  const signedIn = deps({ signedIn: false });
+  await byId('P3').run(signedIn);
+  expect(signedIn.store.has('member|private|mxproofAuth')).toBe(true);
+  const declined = deps({ signedIn: false, declines: true });
+  await byId('P3').run(declined);
+  expect(declined.store.has('member|private|mxproofAuth')).toBe(false);
+});
+test('P3 after reload passes when the saved marker is there and the token is still there', async () => {
+  const d = deps({ signedIn: false });
+  await byId('P3').run(d);
+  expect(await p3AfterReload(d)).toMatchObject({ id: 'P3', status: 'pass', detail: expect.stringContaining('token after reload: yes') });
+});
+test('P3 after reload keeps what the first part found', async () => {
+  const d = deps({ hostStatus: { [API_HOST]: 401 } });
+  await byId('P3').run(d);
+  expect((await p3AfterReload(d))?.detail).toContain(`hosts that worked: ${TRELLO_HOST}`);
 });
 test('P3 after reload reports once, then clears its marker', async () => {
-  const d = deps({ authorized: false });
+  const d = deps({ signedIn: false });
   await byId('P3').run(d);
-  expect(await p3AfterReload(d)).toMatchObject({ id: 'P3', status: 'pass', detail: 'authorised after reload: yes' });
+  expect(await p3AfterReload(d)).toMatchObject({ id: 'P3', status: 'pass' });
   expect(d.store.has('member|private|mxproofAuth')).toBe(false);
   expect(await p3AfterReload(d)).toBeNull();
 });
@@ -163,14 +247,61 @@ test('P3 after reload ignores a marker left by another browser, and leaves it al
   expect(await p3AfterReload(d)).toBeNull();
   expect(d.store.has('member|private|mxproofAuth')).toBe(true);
 });
-test('P3 after reload says nothing when authorisation was never tried', async () => {
+test('P3 after reload says nothing when sign-in was never tried', async () => {
   expect(await p3AfterReload(deps())).toBeNull();
 });
 test('P3 after reload fails when the token is gone', async () => {
-  const d = deps({ authorized: false });
+  const d = deps({ signedIn: false });
   await byId('P3').run(d);
-  await d.t.getRestApi().clearToken();
-  expect(await p3AfterReload(d)).toMatchObject({ id: 'P3', status: 'fail' });
+  (d.auth as TrelloAuth & { dropToken: () => void }).dropToken();
+  expect(await p3AfterReload(d)).toMatchObject({ id: 'P3', status: 'fail', detail: expect.stringContaining('token after reload: no') });
+});
+
+describe('a check that needs a token and finds none', () => {
+  for (const id of ['P5', 'P6', 'P7', 'P8']) {
+    test(`${id} says "Not signed in. Run P3 first." and makes no request`, async () => {
+      const d = deps({ signedIn: false });
+      const r = await byId(id).run(d);
+      expect(r).toMatchObject({ status: 'fail', detail: 'Not signed in. Run P3 first.' });
+      expect(d.calls).toEqual([]);
+    });
+  }
+});
+
+describe('the host P3 found', () => {
+  test('later checks use trello.com when P3 has not run, and say so', async () => {
+    const d = deps();
+    const r = await byId('P6').run(d);
+    expect(d.calls.every(c => c.url.startsWith(`${TRELLO_HOST}/`))).toBe(true);
+    expect(r.detail).toContain(`REST host: ${TRELLO_HOST}`);
+  });
+  test.each([
+    ['only api.trello.com answered', { [TRELLO_HOST]: 401 } as Opts['hostStatus'], API_HOST],
+    ['only trello.com answered', { [API_HOST]: 'network' } as Opts['hostStatus'], TRELLO_HOST],
+  ])('later checks use the host P3 found (%s), and say so', async (_name, hostStatus, expected) => {
+    const o: Opts = { hostStatus };
+    const d = deps(o);
+    await byId('P3').run(d);
+    o.hostStatus = undefined;                 // from here on both hosts answer, so only the saved host decides
+    for (const id of ['P5', 'P6', 'P7', 'P8']) {
+      d.calls.length = 0;
+      const r = await byId(id).run(d);
+      expect(r.detail).toContain(`REST host: ${expected}`);
+      expect(d.calls.length).toBeGreaterThan(0);
+      expect(d.calls.every(c => c.url.startsWith(`${expected}/`))).toBe(true);
+    }
+  });
+});
+
+test('no request anywhere carries a key= or token= parameter', async () => {
+  const d = deps({ imgLoads: false });
+  for (const id of ['P3', 'P5', 'P6', 'P7', 'P8']) await byId(id).run(d);
+  expect(d.calls.length).toBeGreaterThan(40);
+  for (const c of d.calls) {
+    expect(new URL(c.url).searchParams.has('key')).toBe(false);
+    expect(new URL(c.url).searchParams.has('token')).toBe(false);
+    expect(c.url).not.toContain(TOKEN);
+  }
 });
 
 test('P5 reports which image method worked', async () => {
@@ -181,12 +312,12 @@ test('P5 prefers img when it loads', async () => {
   const r = await byId('P5').run(deps({ imgLoads: true }));
   expect(r).toMatchObject({ status: 'pass', detail: expect.stringMatching(/^img/) });
 });
-test('P5 fetches a Trello-hosted image with the OAuth header', async () => {
+test('P5 fetches a Trello-hosted image with the Bearer header', async () => {
   const url = 'https://trello.com/1/cards/b/attachments/x/download/big.png';
   const d = deps({ imgLoads: false, coverUrl: url });
   await byId('P5').run(d);
   const imageCall = d.calls.find(c => c.url === url);
-  expect(imageCall?.headers.Authorization).toBe(`OAuth oauth_consumer_key="KEY", oauth_token="${TOKEN}"`);
+  expect(imageCall?.headers.Authorization).toBe(`Bearer ${TOKEN}`);
 });
 test('P5 does not send the Authorization header to a host that is not Trello', async () => {
   const d = deps({ imgLoads: false, coverUrl: 'https://images.unsplash.com/photo.jpg' });
@@ -204,11 +335,24 @@ test('P5 does not treat a look-alike host as Trello', async () => {
 test('P5 sends the header to a subdomain of trello.com', async () => {
   const d = deps({ imgLoads: false, coverUrl: 'https://trello-attachments.trello.com/x.png' });
   await byId('P5').run(d);
-  expect(d.calls.find(c => c.url.startsWith('https://trello-attachments.trello.com'))?.headers.Authorization).toContain('oauth_token');
+  expect(d.calls.find(c => c.url.startsWith('https://trello-attachments.trello.com'))?.headers.Authorization).toBe(`Bearer ${TOKEN}`);
 });
 test('P5 fails when neither method works', async () => {
-  const r = await byId('P5').run(deps({ imgLoads: false, fetchStatus: 401 }));
+  const r = await byId('P5').run(deps({ imgLoads: false, fetchStatus: 500 }));
   expect(r.status).toBe('fail');
+});
+test('P5 reports a 401 on the cover download with its status and the short error text', async () => {
+  const url = 'https://trello.com/1/cards/b/attachments/x/download/big.png';
+  const d = deps({ imgLoads: false, coverUrl: url });
+  const real = d.fetch;
+  d.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
+    String(input) === url ? new Response('unauthorized permission requested', { status: 401 }) : real(input, init)) as typeof fetch;
+  const r = await byId('P5').run(d);
+  expect(r.status).toBe('fail');
+  expect(r.detail).toContain('HTTP 401');
+  expect(r.detail).toContain('unauthorized permission requested');
+  expect(r.detail).toContain('with the Authorization header');
+  expect(r.detail).not.toContain(TOKEN);
 });
 
 test('P6 reports requests per second and any 429', async () => {
@@ -280,6 +424,14 @@ test('P6 fails clearly when a position value is refused', async () => {
   const r = await byId('P6').run(deps({ fetchStatus: 400 }));
   expect(r.status).toBe('fail');
 });
+test('a refused request gives the HTTP status and the short error text, so a 401 can be recognised', async () => {
+  for (const id of ['P5', 'P6', 'P7', 'P8']) {
+    const r = await byId(id).run(deps({ fetchStatus: 401 }));
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('HTTP 401 unauthorized permission requested');
+    expect(r.detail).toContain('REST host: https://trello.com');
+  }
+});
 
 test('P7 creates a field, renames an option, reads it back and deletes the field', async () => {
   const d = deps();
@@ -317,8 +469,9 @@ describe('P8', () => {
     expect(r.detail).toMatch(/30 saves in \d+ ms, failures: 0/);
     expect(burstSets(d)).toBe(31);                                  // the stamp, then the burst
     const read = d.calls.find(c => c.method === 'GET' && c.url.includes('/1/boards/board1?'));
-    expect(read?.url).toBe('https://api.trello.com/1/boards/board1?cards=open&card_fields=name&card_pluginData=true');
-    expect(read?.headers.Authorization).toBe(`OAuth oauth_consumer_key="KEY", oauth_token="${TOKEN}"`);
+    expect(read?.url).toBe('https://trello.com/1/boards/board1?cards=open&card_fields=name&card_pluginData=true');
+    expect(r.detail).toContain('REST host: https://trello.com');
+    expect(read?.headers.Authorization).toBe(`Bearer ${TOKEN}`);
     expect(d.store.has(KEY)).toBe(false);
   });
   test('P8 fails when the context has no plugin id, and still removes its key', async () => {
@@ -387,6 +540,15 @@ test('no result ever contains the token', async () => {
   const d = deps({ imgLoads: false });
   for (const id of ['P1', 'P3', 'P5', 'P6', 'P7', 'P8']) {
     expect(JSON.stringify(await byId(id).run(d))).not.toContain(TOKEN);
+  }
+  expect(JSON.stringify(await p3AfterReload(d))).not.toContain(TOKEN);
+});
+test('no result holds the token even when Trello echoes it in an error', async () => {
+  const d = deps();
+  d.fetch = (async () => new Response(`bad credentials ${TOKEN}`, { status: 401 })) as typeof fetch;
+  for (const id of ['P3', 'P5', 'P6', 'P7', 'P8']) {
+    const r = await byId(id).run(d);
+    expect(JSON.stringify(r)).not.toContain(TOKEN);
   }
 });
 

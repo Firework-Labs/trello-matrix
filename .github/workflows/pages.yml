@@ -27,8 +27,8 @@ jobs:
       - run: npm test
       - run: npm run build
         env:
-          # The API key is public by design. No token or secret is ever used here.
-          VITE_TRELLO_APP_KEY: ${{ vars.TRELLO_APP_KEY }}
+          # The OAuth 2.0 client ID is public by design. No token or secret is ever used here.
+          VITE_TRELLO_CLIENT_ID: ${{ vars.TRELLO_CLIENT_ID }}
           VITE_PROOF: ${{ vars.PROOF }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

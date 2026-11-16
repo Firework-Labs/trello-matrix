@@ -1,12 +1,18 @@
-import { APP_KEY, APP_NAME } from '../config';
+import { CLIENT_ID, REDIRECT_URI } from '../config';
+import { createAuth } from '../trello/auth';
 import { checks, p3AfterReload, p4Closed, p4Survived, writeCheckIds, writePing } from './checks';
 import type { CheckDeps, CheckResult } from './checks';
-import { loadResults, saveResults } from './results';
-
-const t = TrelloPowerUp.iframe({ appKey: APP_KEY, appName: APP_NAME });
-const deps: CheckDeps = { t, fetch: (...args) => window.fetch(...args), key: APP_KEY, now: () => Date.now() };
+import { buildReport, loadHost, loadResults, saveHost, saveResults } from './results';
 
 const storage = (() => { try { return window.sessionStorage; } catch { return undefined; } })();
+const t = TrelloPowerUp.iframe({ clientId: CLIENT_ID, redirectUri: REDIRECT_URI });
+const deps: CheckDeps = {
+  t,
+  auth: createAuth(t),
+  fetch: (...args) => window.fetch(...args),
+  host: { get: () => loadHost(storage), set: host => saveHost(storage, host) },   // kept in this tab, with the saved results
+  now: () => Date.now(),
+};
 const results = new Map<string, CheckResult>(loadResults(storage).map(r => [r.id, r]));
 const writeButtons: HTMLButtonElement[] = [];
 
@@ -69,8 +75,8 @@ const checkRows = checks.map(c => {
 const copyBox = el('textarea', { readOnly: true, hidden: true });
 const copyButton = el('button', { textContent: 'Copy results' });
 copyButton.addEventListener('click', async () => {
-  // The results never contain the REST token; nothing here reads it.
-  const json = JSON.stringify({ browser: navigator.userAgent, at: new Date().toISOString(), results: [...results.values()] }, null, 2);
+  // The results never contain the access token; nothing here reads it.
+  const json = buildReport({ browser: navigator.userAgent, at: new Date().toISOString(), restHost: deps.host.get(), results: [...results.values()] });
   copyBox.value = json;
   copyBox.hidden = false;
   copyBox.select();
@@ -80,6 +86,7 @@ copyButton.addEventListener('click', async () => {
 document.getElementById('app')!.append(
   el('h1', {}, 'Matrix checks'),
   el('p', {}, 'These checks find out what Trello allows. Follow the script you were sent. The results stay in this browser tab until it is closed, and are sent nowhere.'),
+  ...(CLIENT_ID ? [] : [el('p', { className: 'fail' }, 'This page was built without a Trello client ID, so sign-in (P3) will fail. See docs/setup.md, Part 3.')]),
   el('label', {}, testBoard, ' This is a test board'),
   el('p', { className: 'note' }, 'The checks that write to the board stay switched off until you tick the box.'),
   el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Check'), el('th', {}, 'What it finds out'), el('th', {}, ''))), el('tbody', {}, ...checkRows)),

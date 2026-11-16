@@ -1,13 +1,20 @@
 // The live checks from spec section 10. Each check takes everything it touches
-// (`t`, `fetch`, `key`, `now`) as arguments, so the unit tests use fakes and
+// (`t`, `auth`, `fetch`, `host`, `now`) as arguments, so the unit tests use fakes and
 // nothing here contacts Trello unless the proof page passes it the real ones.
-// No result may ever contain the REST token.
+// No result may ever contain the access token.
+import { authHeaders } from '../trello/auth';
+import type { TrelloAuth } from '../trello/auth';
 
 export interface CheckResult { id: string; title: string; status: 'pass' | 'fail' | 'manual'; detail: string; ms?: number }
+/** The two addresses P3 tries. The documentation does not say which one accepts an OAuth 2.0 token. */
+export type RestHost = 'https://api.trello.com' | 'https://trello.com';
+/** Where the host P3 found is kept (the proof page keeps it with the saved results, in the tab). */
+export interface RestHostStore { get(): RestHost; set(host: RestHost): void }
 export interface CheckDeps {
   t: TrelloIframe;
+  auth: TrelloAuth;
   fetch: typeof fetch;
-  key: string;
+  host: RestHostStore;
   now: () => number;
   /** Tries an <img> with this address. Defaults to a real image element. */
   loadImage?: (url: string) => Promise<boolean>;
@@ -15,7 +22,8 @@ export interface CheckDeps {
 interface Check { id: string; title: string; needsClick: boolean; run(d: CheckDeps): Promise<CheckResult> }
 type Outcome = Pick<CheckResult, 'status' | 'detail'>;
 
-const API = 'https://api.trello.com';
+const HOSTS: readonly RestHost[] = ['https://api.trello.com', 'https://trello.com'];
+const NOT_SIGNED_IN = 'Not signed in. Run P3 first.';
 const P2_TIMEOUT_MS = 90_000;
 const P2_POLL_MS = 1000;
 const IMAGE_TIMEOUT_MS = 10_000;
@@ -36,16 +44,23 @@ function errorText(e: unknown): string {
   try { return JSON.stringify(e); } catch { return String(e); }
 }
 
-function check(id: string, title: string, needsClick: boolean, fn: (d: CheckDeps) => Promise<Outcome>): Check {
+class NotSignedIn extends Error {
+  constructor() { super(NOT_SIGNED_IN); }
+}
+
+/** `usesRest` checks say in their detail which REST host they used. */
+function check(id: string, title: string, needsClick: boolean, fn: (d: CheckDeps) => Promise<Outcome>, usesRest = false): Check {
   return {
     id, title, needsClick,
     async run(d) {
       const started = d.now();
+      const hostNote = () => (usesRest ? ` (REST host: ${d.host.get()})` : '');
       try {
         const outcome = await fn(d);
-        return { id, title, ...outcome, ms: d.now() - started };
+        return { id, title, ...outcome, detail: outcome.detail + hostNote(), ms: d.now() - started };
       } catch (e) {
-        return { id, title, status: 'fail', detail: errorText(e), ms: d.now() - started };
+        const detail = e instanceof NotSignedIn ? e.message : errorText(e) + hostNote();
+        return { id, title, status: 'fail', detail, ms: d.now() - started };
       }
     },
   };
@@ -53,25 +68,27 @@ function check(id: string, title: string, needsClick: boolean, fn: (d: CheckDeps
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-// ---- REST helpers (header authorisation; the token never leaves these) -------
+// ---- REST helpers (Bearer header; the token never leaves these) ----------------
 
 async function token(d: CheckDeps): Promise<string> {
-  const value = await d.t.getRestApi().getToken();
-  if (!value) throw new Error('Not authorised yet. Run P3 first.');
+  const value = await d.auth.accessToken();
+  if (!value) throw new NotSignedIn();
   return value;
 }
-function authHeader(d: CheckDeps, tok: string): string {
-  return `OAuth oauth_consumer_key="${d.key}", oauth_token="${tok}"`;
-}
 function rest(d: CheckDeps, tok: string, method: string, path: string, body?: unknown): Promise<Response> {
-  const headers: Record<string, string> = { Authorization: authHeader(d, tok) };
+  const url = `${d.host.get()}${path}`;
+  const headers: Record<string, string> = authHeaders(url, tok);
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  return d.fetch(`${API}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  return d.fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
 }
-async function mustBeOk(r: Response, what: string): Promise<Response> {
+/** "HTTP 401 unauthorized permission requested": the status and the start of Trello's error text, never the token. */
+async function refusal(r: Response, tok: string): Promise<string> {
+  const text = (await r.text().catch(() => '')).split(tok).join('[token]').slice(0, 200);
+  return `HTTP ${r.status}${text ? ` ${text}` : ''}`;
+}
+async function mustBeOk(r: Response, what: string, tok: string): Promise<Response> {
   if (r.ok) return r;
-  const text = (await r.text().catch(() => '')).slice(0, 200);
-  throw new Error(`${what}: HTTP ${r.status}${text ? ` ${text}` : ''}`);
+  throw new Error(`${what}: ${await refusal(r, tok)}`);
 }
 
 // ---- P1: storage on another card id ------------------------------------------
@@ -133,35 +150,66 @@ const p2 = check('P2', 'A change by another person arrives without a reload', tr
   return { status: 'pass', detail: `render fired: ${renderFired ? 'yes' : 'no'}, seen after ${seenAfter} ms (the two computers' clocks may differ by a second or two)` };
 });
 
-// ---- P3: REST authorisation and whether it survives a reload -----------------
+// ---- P3: sign in, which REST host accepts the token, and whether it survives a reload
 
 const P3_MARKER = ['member', 'private', 'mxproofAuth'] as const;
+const P3_TITLE = 'Sign in with Trello (OAuth 2.0)';
 const userAgent = () => globalThis.navigator?.userAgent ?? '';
 
-const p3 = check('P3', 'REST authorisation works and persists', true, async d => {
-  const api = d.t.getRestApi();
-  // Straight from the click, with nothing awaited first (Safari may block a popup after an async gap).
+/** GET the board's name from one host. Reports the status or the network/CORS error text; never the token. */
+async function probeHost(d: CheckDeps, host: RestHost, boardId: string, tok: string): Promise<{ ok: boolean; text: string }> {
+  const url = `${host}/1/boards/${boardId}?fields=name`;
+  try {
+    const r = await d.fetch(url, { method: 'GET', headers: authHeaders(url, tok) });
+    return r.status === 200 ? { ok: true, text: 'HTTP 200' } : { ok: false, text: await refusal(r, tok) };
+  } catch (e) {
+    return { ok: false, text: `network error: ${errorText(e)}` };
+  }
+}
+
+const p3 = check('P3', P3_TITLE, true, async d => {
+  // Straight from the click, with nothing awaited first (a browser may block the window after an async gap).
   // Always called, even when a token exists, so every run tests the sign-in itself.
-  await api.authorize({ scope: 'read,write', expiration: 'never' });
-  if (!(await api.isAuthorized())) return { status: 'fail', detail: 'authorised now: no (authorise returned but isAuthorized is still false)' };
-  await d.t.set(...P3_MARKER, { ua: userAgent(), at: d.now() });
-  return { status: 'manual', detail: 'authorised now: yes. Now reload this page; the result for "after reload" replaces this row.' };
+  const signIn = d.auth.authorize();
+  try {
+    await signIn;
+  } catch (e) {
+    return { status: 'fail', detail: `token received: no (${errorText(e)})` };
+  }
+  const tok = await d.auth.accessToken();
+  if (!tok) return { status: 'fail', detail: 'token received: no (sign-in finished but no access token is available)' };
+
+  const board = await d.t.board('id');
+  const worked: RestHost[] = [];
+  const seen: string[] = [];
+  for (const host of HOSTS) {
+    const answer = await probeHost(d, host, board.id, tok);
+    seen.push(`${host}: ${answer.text}`);
+    if (answer.ok) worked.push(host);
+  }
+  const base = `token received: yes; ${seen.join('; ')}`;
+  const [first] = worked;
+  if (!first) return { status: 'fail', detail: `${base}; no host answered 200` };
+  d.host.set(first);
+  const detail = `${base}; hosts that worked: ${worked.join(', ')}`;
+  await d.t.set(...P3_MARKER, { ua: userAgent(), at: d.now(), detail });
+  return { status: 'pass', detail: `${detail}. Now reload this page; the result for "after reload" replaces this row.` };
 });
 
 /**
- * Run on every page load. Reports on P3 only if this same browser authorised before, and only once:
+ * Run on every page load. Reports on P3 only if this same browser signed in before, and only once:
  * the marker is removed after it reports, so a later load (or another browser) is not told a stale answer.
  */
-export async function p3AfterReload(d: Pick<CheckDeps, 't' | 'now'>): Promise<CheckResult | null> {
-  const title = 'REST authorisation works and persists';
+export async function p3AfterReload(d: Pick<CheckDeps, 't' | 'now' | 'auth'>): Promise<CheckResult | null> {
   try {
     const marker = await d.t.get(...P3_MARKER);
     if (!marker || marker.ua !== userAgent()) return null;
     await d.t.remove(...P3_MARKER);
-    const still = await d.t.getRestApi().isAuthorized();
-    return { id: 'P3', title, status: still ? 'pass' : 'fail', detail: `authorised after reload: ${still ? 'yes' : 'no'}` };
+    const still = await d.auth.isAuthorized();
+    const before = typeof marker.detail === 'string' && marker.detail ? `${marker.detail}; ` : '';
+    return { id: 'P3', title: P3_TITLE, status: still ? 'pass' : 'fail', detail: `${before}token after reload: ${still ? 'yes' : 'no'}` };
   } catch (e) {
-    return { id: 'P3', title, status: 'fail', detail: errorText(e) };
+    return { id: 'P3', title: P3_TITLE, status: 'fail', detail: errorText(e) };
   }
 }
 
@@ -211,40 +259,31 @@ function loadImageElement(url: string): Promise<boolean> {
 
 interface RestCard { id: string; cover?: { scaled?: { url: string }[] } | null }
 
-/** The token may only go to Trello itself; cover images can come from other hosts. */
-function isTrelloHost(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' && (u.hostname === 'trello.com' || u.hostname.endsWith('.trello.com'));
-  } catch {
-    return false;
-  }
-}
-
 const p5 = check('P5', 'A card cover image can be shown', false, async d => {
   const tok = await token(d);
   const board = await d.t.board('id');
-  const cards: RestCard[] = await (await mustBeOk(await rest(d, tok, 'GET', `/1/boards/${board.id}/cards?fields=id,cover`), 'List cards')).json();
+  const cards: RestCard[] = await (await mustBeOk(await rest(d, tok, 'GET', `/1/boards/${board.id}/cards?fields=id,cover`), 'List cards', tok)).json();
   const withCover = cards.find(c => (c.cover?.scaled?.length ?? 0) > 0);
   const url = withCover?.cover?.scaled?.at(-1)?.url;
   if (!url) return { status: 'manual', detail: 'No card on this board has a cover image. Add one to any card and run P5 again.' };
 
   if (await (d.loadImage ?? loadImageElement)(url)) return { status: 'pass', detail: 'img works (a plain image tag loads the cover)' };
 
-  const trello = isTrelloHost(url);
+  const headers = authHeaders(url, tok);   // only Trello's own hosts get the header
+  const trello = 'Authorization' in headers;
   const how = trello ? 'with the Authorization header' : 'without the Authorization header, because the image is not hosted by Trello';
   let fetched = 'fetch failed';
   try {
-    const r = await d.fetch(url, trello ? { headers: { Authorization: authHeader(d, tok) } } : undefined);
+    const r = await d.fetch(url, trello ? { headers } : undefined);
     if (r.ok && (await r.blob()).size > 0) {
       return { status: 'pass', detail: `fetch works (img did not load; fetching ${how} does)` };
     }
-    fetched = `fetch ${how} failed: HTTP ${r.status}`;
+    fetched = `fetch ${how} failed: ${await refusal(r, tok)}`;
   } catch (e) {
     fetched = `fetch ${how} failed: ${errorText(e)}`;
   }
   return { status: 'fail', detail: `img did not load; ${fetched}` };
-});
+}, true);
 
 // ---- P6: list position values and request pacing -----------------------------
 
@@ -254,7 +293,7 @@ const p6 = check('P6', 'Which list positions are accepted, and how fast', false,
   const card = list?.cards?.[0];
   if (!card) return { status: 'fail', detail: 'The first list needs at least one card.' };
   const cardPath = `/1/cards/${card.id}`;
-  const readPos = async () => ((await (await mustBeOk(await rest(d, tok, 'GET', `${cardPath}?fields=pos`), 'Read pos')).json()) as { pos: number }).pos;
+  const readPos = async () => ((await (await mustBeOk(await rest(d, tok, 'GET', `${cardPath}?fields=pos`), 'Read pos', tok)).json()) as { pos: number }).pos;
 
   const original = await readPos();
 
@@ -277,7 +316,7 @@ const p6 = check('P6', 'Which list positions are accepted, and how fast', false,
     const accepted: string[] = [];
     for (const value of ['top', 'bottom', 65536.5]) {
       const r = await rest(d, tok, 'PUT', `${cardPath}?pos=${value}`);
-      if (!r.ok) throw new Error(`pos=${value} was refused: HTTP ${r.status}`);
+      if (!r.ok) throw new Error(`pos=${value} was refused: ${await refusal(r, tok)}`);
       accepted.push(`${value} gives ${await readPos()}`);
     }
     let tooMany = 0;
@@ -298,7 +337,7 @@ const p6 = check('P6', 'Which list positions are accepted, and how fast', false,
   const note = restored ? 'card position restored' : `card position not restored: set card ${card.id} back to position ${original} by hand`;
   if (!outcome) return { status: 'fail', detail: `${failure}; ${note}` };
   return { status: restored ? 'pass' : 'fail', detail: `${outcome.detail}; ${note}` };
-});
+}, true);
 
 // ---- P7: create a dropdown field and rename one of its options ---------------
 
@@ -308,29 +347,29 @@ const p7 = check('P7', 'A dropdown field can be created and an option renamed', 
   const created = (await (await mustBeOk(await rest(d, tok, 'POST', '/1/customFields', {
     idModel: board.id, modelType: 'board', name: 'mxproof', type: 'list', pos: 'bottom', display_cardFront: true,
     options: [{ value: { text: 'One' }, pos: 1 }, { value: { text: 'Two' }, pos: 2 }],
-  }), 'Create field')).json()) as { id: string; options?: { id: string }[] };
+  }), 'Create field', tok)).json()) as { id: string; options?: { id: string }[] };
   const fieldId = created.id;
   let problem: string | null = null;
   try {
     const optionId = created.options?.[0]?.id;
     if (!optionId) throw new Error('The new field came back without options.');
     const optionPath = `/1/customFields/${fieldId}/options/${optionId}`;
-    await mustBeOk(await rest(d, tok, 'PUT', optionPath, { value: { text: RENAMED } }), 'Rename option');
-    const back = (await (await mustBeOk(await rest(d, tok, 'GET', optionPath), 'Read option')).json()) as { value?: { text?: string } };
+    await mustBeOk(await rest(d, tok, 'PUT', optionPath, { value: { text: RENAMED } }), 'Rename option', tok);
+    const back = (await (await mustBeOk(await rest(d, tok, 'GET', optionPath), 'Read option', tok)).json()) as { value?: { text?: string } };
     if (back.value?.text !== RENAMED) throw new Error(`Renamed to "${RENAMED}" but read back "${back.value?.text}"`);
   } catch (e) {
     problem = errorText(e);
   }
   let leftover = '';
   try {
-    await mustBeOk(await rest(d, tok, 'DELETE', `/1/customFields/${fieldId}`), 'Delete field');
+    await mustBeOk(await rest(d, tok, 'DELETE', `/1/customFields/${fieldId}`), 'Delete field', tok);
   } catch (e) {
     leftover = ` The test field "mxproof" could not be deleted (${errorText(e)}); delete it by hand.`;
   }
   if (problem !== null) return { status: 'fail', detail: `${problem}.${leftover}` };
   if (leftover) return { status: 'fail', detail: `Field created and option renamed.${leftover}` };
   return { status: 'pass', detail: `Field created; option renamed to "${RENAMED}" and read back; field deleted` };
-});
+}, true);
 
 // ---- P8: hidden card data through REST, and a burst of card-storage saves ----
 
@@ -356,7 +395,7 @@ const p8 = check('P8', 'Hidden card data through REST, and a burst of saves', fa
       const hasPlugin = typeof plugin === 'string' && plugin !== '';
       facts.push(`plugin id in the context: ${hasPlugin ? 'yes' : 'no'}`);
       const path = `/1/boards/${board.id}?cards=open&card_fields=name&card_pluginData=true`;
-      const read = (await (await mustBeOk(await rest(d, tok, 'GET', path), 'Read board')).json()) as RestBoardCards;
+      const read = (await (await mustBeOk(await rest(d, tok, 'GET', path), 'Read board', tok)).json()) as RestBoardCards;
       const entry = read.cards?.find(c => c.id === first.id)?.pluginData
         ?.find(e => typeof e.value === 'string' && e.value.includes(stamp));
       facts.push(`value in the REST card data: ${entry ? 'found' : 'not found'}`);
@@ -389,6 +428,6 @@ const p8 = check('P8', 'Hidden card data through REST, and a burst of saves', fa
   }
   const detail = `${[...(problem ? [problem] : []), ...facts].join('; ')}.${removed}`;
   return { status: holds && !problem && !removed ? 'pass' : 'fail', detail };
-});
+}, true);
 
 export const checks: Check[] = [p1, p2, p3, p4, p5, p6, p7, p8];

@@ -1,4 +1,4 @@
-import { APP_KEY, APP_NAME } from './config';
+import { CLIENT_ID, REDIRECT_URI } from './config';
 
 const iconUrl = new URL(`${import.meta.env.BASE_URL}icon.svg`, location.origin).href;
 
@@ -25,5 +25,5 @@ TrelloPowerUp.initialize(
       },
     ],
   },
-  { appKey: APP_KEY, appName: APP_NAME },
+  { clientId: CLIENT_ID, redirectUri: REDIRECT_URI },
 );

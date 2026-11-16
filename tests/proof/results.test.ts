@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { loadResults, saveResults } from '../../src/proof/results';
+import { buildReport, loadHost, loadResults, saveHost, saveResults } from '../../src/proof/results';
 import type { CheckResult } from '../../src/proof/checks';
 
 const memory = () => {
@@ -22,4 +22,19 @@ test('junk or missing storage gives an empty list rather than an error', () => {
   expect(loadResults(tab).map(r => r.id)).toEqual(['P1']);
   expect(loadResults(undefined)).toEqual([]);
   expect(() => saveResults(undefined, [row('P1')])).not.toThrow();
+});
+
+test('the REST host P3 found is kept in the tab, and only a known host is accepted', () => {
+  const tab = memory();
+  expect(loadHost(tab)).toBe('https://trello.com');           // P3 has not run
+  saveHost(tab, 'https://api.trello.com');
+  expect(loadHost(tab)).toBe('https://api.trello.com');
+  tab.setItem('mxproof.host', 'https://evil.example');
+  expect(loadHost(tab)).toBe('https://trello.com');
+  expect(loadHost(undefined)).toBe('https://trello.com');
+  expect(() => saveHost(undefined, 'https://trello.com')).not.toThrow();
+});
+test('the copied report says which authorisation and which REST host were used', () => {
+  const report = JSON.parse(buildReport({ browser: 'UA', at: '2026-11-16T00:00:00.000Z', restHost: 'https://trello.com', results: [row('P1')] }));
+  expect(report).toEqual({ auth: 'oauth2', restHost: 'https://trello.com', browser: 'UA', at: '2026-11-16T00:00:00.000Z', results: [row('P1')] });
 });

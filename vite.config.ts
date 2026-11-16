@@ -9,6 +9,7 @@ export default defineConfig({
       input: {
         index: resolve(import.meta.dirname, 'index.html'),
         matrix: resolve(import.meta.dirname, 'matrix.html'),
+        'oauth-callback': resolve(import.meta.dirname, 'oauth-callback.html'),
         proof: resolve(import.meta.dirname, 'proof.html'),
         dev: resolve(import.meta.dirname, 'dev.html'),
       },
