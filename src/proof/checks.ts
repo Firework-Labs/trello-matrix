@@ -337,13 +337,22 @@ function shorten(text: string, tok: string): string {
     .replace(/\s*\|\s*/g, ' / ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
+/**
+ * "HTTP 401 unauthorized permission requested" for the detail. Only a Trello host's answer shows its body text;
+ * any other host (an image or storage service) shows just the status, because its error body can repeat a file name.
+ */
+async function refusalText(r: Response, requestUrl: string, tok: string): Promise<string> {
+  if (!('Authorization' in authHeaders(requestUrl, tok))) return `HTTP ${r.status}`;
+  return shorten(await refusal(r, tok), tok);
+}
+
 type Method = 'img' | 'fetch+token' | 'fetch plain';
 interface Attempt { pair: string; state: 'worked' | 'failed' | 'not tried'; note: string }
 
 async function fetchAttempt(d: CheckDeps, tok: string, url: string, init: RequestInit | undefined): Promise<{ ok: boolean; note: string }> {
   try {
     const r = await d.fetch(url, init);
-    if (!r.ok) return { ok: false, note: shorten(await refusal(r, tok), tok) };
+    if (!r.ok) return { ok: false, note: await refusalText(r, url, tok) };
     const size = (await r.blob()).size;
     return size > 0 ? { ok: true, note: `${size} bytes` } : { ok: false, note: `HTTP ${r.status} but the body was empty` };
   } catch (e) {
@@ -422,7 +431,7 @@ const p5 = check('P5', 'A card cover image can be shown', 'Press Run. Needs a ca
     const board = await d.t.board('id');
     const r = await rest(d, tok, 'GET', `/1/boards/${board.id}/cards?${REST_CARD_FIELDS}`);
     if (!r.ok) {
-      restLine = `REST card list: refused (${shorten(await refusal(r, tok), tok)})`;
+      restLine = `REST card list: refused (${await refusalText(r, d.host.get(), tok)})`;
     } else {
       const body: unknown = await r.json().catch(() => undefined);
       if (Array.isArray(body)) {
@@ -459,7 +468,7 @@ const p5 = check('P5', 'A card cover image can be shown', 'Press Run. Needs a ca
   try {
     const r = await rest(d, tok, 'GET', `/1/cards/${cardId}/attachments?${REST_ATTACHMENT_FIELDS}`);
     if (!r.ok) {
-      directLine = `REST card attachments (card ${cardId}): refused (${shorten(await refusal(r, tok), tok)})`;
+      directLine = `REST card attachments (card ${cardId}): refused (${await refusalText(r, d.host.get(), tok)})`;
     } else {
       const body: unknown = await r.json().catch(() => undefined);
       if (Array.isArray(body)) {
@@ -568,7 +577,7 @@ const OPTION_RENAMED = 'mxproof-renamed';
 const OPTION_TEXTS = ['One', 'Two'];
 const CLIENT_WAIT_MS = 6000;
 const CLIENT_POLL_MS = 250;
-const BY_HAND = `The field ${FIELD} could not be removed: delete it by hand (board menu, Custom Fields).`;
+const byHand = (name: string) => `The field ${name} could not be removed: delete it by hand (board menu, Custom Fields).`;
 
 interface ProofOption { id: string; text: string }
 const optionsOf = (field: Obj | null | undefined): ProofOption[] =>
@@ -590,7 +599,6 @@ async function waitFor(d: CheckDeps, probe: () => Promise<boolean>): Promise<num
 // it, because the last words may be the instruction to delete the field by hand).
 const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete', 'Press Run. It adds a temporary field, uses it on one card, and removes it.', false, async d => {
   const tok = await token(d);
-  const board = await d.t.board('id');
   const lines: string[] = [`REST host: ${d.host.get()}`];
   const say = (e: unknown) => shorten(errorText(e), tok);
   const record = (step: string, text: string) => { lines.push(`${step}: ${text}`); };
@@ -599,7 +607,7 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
   const call = async (step: string, method: string, path: string, body?: unknown): Promise<{ ok: boolean; json?: unknown }> => {
     try {
       const r = await rest(d, tok, method, path, body);
-      if (!r.ok) { record(step, shorten(await refusal(r, tok), tok)); return { ok: false }; }
+      if (!r.ok) { record(step, await refusalText(r, d.host.get(), tok)); return { ok: false }; }
       return { ok: true, json: await r.json().catch(() => undefined) };
     } catch (e) {
       record(step, say(e));
@@ -612,10 +620,12 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
   };
   const skipped = (step: string, why: string) => record(step, `skipped, ${why}`);
 
-  const listPath = `/1/boards/${board.id}/customFields`;
+  let listPath = '';
   let fieldId = '';
   let options: ProofOption[] = [];
-  let leftover = false;
+  let leftover = false;            // a field named mxproof (or mxproof2) was found on the board
+  let leftoverRenamed = false;     // ... and it was the mxproof2 one, which has to be renamed back first
+  let createTried = false;         // a create POST was sent: the board may hold a field even if its id never reached us
   let createdOk = false;
   let renameOptionOk = false;
   let setOk = false;
@@ -658,15 +668,43 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
     const fields = objects(asObj(await d.t.board('customFields'))?.customFields);
     return { found: fields.some(f => asText(f.id) === fieldId), keys: fields[0] ?? null };
   }, leftover);
+  /** Renames the field and reads the name back; false unless the new name is verified. */
+  const renameField = async (step: string, name: string): Promise<boolean> => {
+    let verified = false;
+    await guard(step, async () => {
+      const put = await call(step, 'PUT', `/1/customFields/${fieldId}`, { name });
+      if (!put.ok) return;
+      ok(step);
+      const back = await readField(`${step} read back`);
+      if (!back) return;
+      verified = asText(back.name) === name;
+      record(`${step} read back`, verified ? 'ok' : 'not verified, the new name is not there');
+    });
+    return verified;
+  };
+  /** The options as REST shows them: from the field itself, or, when that answer has none, from its options list. */
+  const readOptions = async (step: string): Promise<{ options: ProofOption[]; via: string } | null> => {
+    const field = await readField(step);
+    if (!field) return null;
+    const own = optionsOf(field);
+    if (own.length > 0) return { options: own, via: 'the field' };
+    const listed = await call(step, 'GET', `/1/customFields/${fieldId}/options`);
+    if (!listed.ok) return null;
+    return { options: optionsOf({ options: listed.json }), via: 'the options list' };
+  };
 
+  let leftName = '';   // the name of a field the delete read back still lists, if any
   try {
-    // 1. find
+    const board = await d.t.board('id');
+    listPath = `/1/boards/${board.id}/customFields`;
+
+    // 1. find (the exact names mxproof and mxproof2 only; mxproof2 is what an earlier run left if it stopped mid-rename)
     await guard('find', async () => {
       const found = await boardFields('find');
       if (!found) return;
-      const old = found.find(f => asText(f.name) === FIELD);
-      if (old) { leftover = true; fieldId = asText(old.id); options = optionsOf(old); }
-      ok('find', old ? `, a field named ${FIELD} is already on the board` : ', no leftover field');
+      const old = found.find(f => asText(f.name) === FIELD) ?? found.find(f => asText(f.name) === FIELD_RENAMED);
+      if (old) { leftover = true; leftoverRenamed = asText(old.name) === FIELD_RENAMED; fieldId = asText(old.id); options = optionsOf(old); }
+      ok('find', old ? `, a field named ${asText(old.name)} is already on the board` : ', no leftover field');
     });
 
     // 2. create (or reuse)
@@ -675,6 +713,7 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
         if (fieldId) { record('create', 'skipped, reusing a leftover field'); createdOk = true; } else record('create', 'the leftover field had no id');
         return;
       }
+      createTried = true;
       const made = await call('create', 'POST', '/1/customFields', {
         idModel: board.id, modelType: 'board', name: FIELD, type: 'list', pos: 'bottom', display_cardFront: true,
         options: OPTION_TEXTS.map((text, i) => ({ value: { text }, pos: i + 1 })),
@@ -685,6 +724,7 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
       options = optionsOf(field);
       if (fieldId) { ok('create'); createdOk = true; } else record('create', 'the answer had no field id');
     });
+    if (fieldId && leftoverRenamed) await renameField('rename leftover back', FIELD);
     if (fieldId) {
       for (let i = options.length; i < OPTION_TEXTS.length; i++) {
         await guard('add option', async () => {
@@ -710,10 +750,10 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
         const put = await call('rename option', 'PUT', `/1/customFields/${fieldId}/options/${first.id}`, { value: { text: OPTION_RENAMED } });
         if (!put.ok) return;
         ok('rename option');
-        const back = await readField('rename option read back');
+        const back = await readOptions('rename option read back');
         if (!back) return;
-        const there = optionsOf(back).find(o => o.id === first.id)?.text === OPTION_RENAMED;
-        record('rename option read back', there ? 'ok' : 'not verified, the renamed text is not there');
+        const there = back.options.find(o => o.id === first.id)?.text === OPTION_RENAMED;
+        record('rename option read back', there ? `ok (from ${back.via})` : `not verified, the renamed text is not there (read from ${back.via})`);
         renameOptionOk = there;
       });
     }
@@ -722,15 +762,8 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
     if (!fieldId) {
       skipped('rename field', 'there is no field');
     } else {
-      for (const [step, name] of [['rename field', FIELD_RENAMED], ['rename field back', FIELD]] as const) {
-        await guard(step, async () => {
-          const put = await call(step, 'PUT', `/1/customFields/${fieldId}`, { name });
-          if (!put.ok) return;
-          ok(step);
-          const back = await readField(`${step} read back`);
-          if (back) record(`${step} read back`, asText(back.name) === name ? 'ok' : 'not verified, the new name is not there');
-        });
-      }
+      await renameField('rename field', FIELD_RENAMED);
+      await renameField('rename field back', FIELD);
     }
 
     // 5. set the field on the first card, and read it back
@@ -780,6 +813,8 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
         clearOk = gone;
       });
     }
+  } catch (e) {
+    record('unexpected', say(e));
   } finally {
     // 9. delete, whatever happened above, and check it is gone
     let gone = false;
@@ -790,14 +825,17 @@ const p7 = check('P7', 'Dropdown fields: create, rename, set on a card, delete',
       } else {
         skipped('delete', 'there is no field id');
       }
+      if (!listPath) { skipped('delete read back', 'the board id is not known'); return; }
       const left = await boardFields('delete read back');
       if (!left) return;
-      gone = !left.some(f => asText(f.id) === fieldId || asText(f.name) === FIELD || asText(f.name) === FIELD_RENAMED);
-      record('delete read back', gone ? 'ok, the field is gone' : `not verified, a field named ${FIELD} is still on the board`);
+      const there = left.find(f => asText(f.id) === fieldId || asText(f.name) === FIELD || asText(f.name) === FIELD_RENAMED);
+      gone = there === undefined;
+      if (there) leftName = asText(there.name) === FIELD_RENAMED ? FIELD_RENAMED : FIELD;
+      record('delete read back', gone ? 'ok, the field is gone' : `not verified, a field named ${leftName} is still on the board`);
     });
     deleteOk = gone && fieldId !== '';
-    // Only say "by hand" when there is a field of ours to remove: one we made or found, or one the list still shows.
-    if (!gone && (fieldId !== '' || leftover)) lines.push(BY_HAND);
+    // Not verified gone, and there may be a field of ours: one we know the id of, found, tried to create, or the read back lists.
+    if (!gone && (fieldId !== '' || leftover || createTried || leftName !== '')) lines.push(byHand(leftName || FIELD));
   }
   const pass = createdOk && renameOptionOk && setOk && clearOk && deleteOk;
   return { status: pass ? 'pass' : 'fail', detail: lines.join(' | ') };

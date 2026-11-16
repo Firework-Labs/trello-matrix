@@ -27,7 +27,7 @@ interface Opts {
   /** What REST answers to a card's attachment list (default: an empty list). */
   cardAttachments?: unknown;
   /** A field named mxproof is already on the board, with this many options (a leftover from an earlier run). */
-  leftoverField?: { options: number };
+  leftoverField?: { options: number; name?: string };
   /** The Power-Up's own data (`t.cards`, `t.board`) never shows the custom field values or fields Trello's API accepted. */
   clientHidesItems?: boolean;
   clientHidesFields?: boolean;
@@ -57,7 +57,7 @@ function deps(o: Opts = {}): Fake {
   const boom = (): never => { throw new Error('boom'); };
   // Board custom fields and the values set on cards, kept like Trello keeps them.
   const fields: FakeField[] = o.leftoverField
-    ? [{ id: 'fOld', name: 'mxproof', options: Array.from({ length: o.leftoverField.options }, (_, i) => ({ id: `fOldo${i + 1}`, value: { text: `Old${i + 1}` }, color: 'none' })) }]
+    ? [{ id: 'fOld', name: o.leftoverField.name ?? 'mxproof', options: Array.from({ length: o.leftoverField.options }, (_, i) => ({ id: `fOldo${i + 1}`, value: { text: `Old${i + 1}` }, color: 'none' })) }]
     : [];
   const items: FakeItem[] = [];
   let sequence = 0;
@@ -83,6 +83,8 @@ function deps(o: Opts = {}): Fake {
       if (method === 'DELETE') { fields.splice(fields.indexOf(field), 1); for (let i = items.length; i--;) if (items[i]!.idCustomField === field.id) items.splice(i, 1); }
       return { json: field };
     }
+    const listOptions = path.match(/^\/1\/customFields\/([^/]+)\/options$/);
+    if (listOptions && method === 'GET') return fieldOf(listOptions[1]) ? { json: fieldOf(listOptions[1])!.options } : missing;
     if (options && method === 'POST') {
       const field = fieldOf(options[1]);
       if (!field) return missing;
@@ -510,8 +512,12 @@ describe('P5', () => {
     expect(order.every(i => i >= 0)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
     expect(tried).toEqual(['https://img.example/cs.png', 'https://img.example/rs.png', 'https://img.example/p2-300.png', 'https://img.example/rp2.png', 'https://img.example/dl2.png']);
-    // the cover attachment is chosen by its id, the largest size not wider than 600, and the client's own download address wins
-    expect(r.detail.match(/client cover\.scaled/g)?.length).toBeGreaterThan(0);
+    // The card has two attachments and att2 is the cover (cover.idAttachment): its preview is the one chosen for
+    // `client attachment preview` (the largest size not wider than 600), not att1's, and the client's own download address wins.
+    expect(tried[2]).toBe('https://img.example/p2-300.png');
+    expect(tried).not.toContain('https://img.example/other-pv.png');
+    expect(tried).not.toContain('https://img.example/p2-1000.png');
+    expect(tried).not.toContain('https://img.example/other.png');
   });
 
   test('tries every candidate by img, fetch with the token and fetch without, even when img works', async () => {
@@ -640,6 +646,14 @@ describe('P5', () => {
     expect(r.detail).not.toContain('Secret card name');
   });
 
+  test('shows only the status for a refusal from a host that is not Trello, so a file name in its body cannot get in', async () => {
+    const url = 'https://storage.example/files/p.png';
+    const d = intercept(deps({ ...clientOnly([{ url }]), imgLoads: false }), u => (u === url ? new Response('<Error>Access denied to Quarterly plan.png</Error>', { status: 403 }) : undefined));
+    const r = await byId('P5').run(d);
+    expect(sectionOf(r.detail, 'Did not work: ')).toContain('client cover.scaled via fetch plain (HTTP 403)');
+    expect(r.detail).not.toContain('Quarterly');
+    expect(r.detail).not.toContain('Access denied');
+  });
   test('masks the file name in each shown path but keeps its extension', async () => {
     const d = deps({ ...clientOnly([{ url: 'https://img.example/photos/Quarterly plan.final.JPG' }]) });
     const r = await byId('P5').run(d);
@@ -656,8 +670,8 @@ describe('P5', () => {
     expect(sectionOf((await byId('P5').run(id)).detail, 'Candidates: ')).toContain('img.example/photos/…');
   });
 
-  test('cuts each refusal or error text to 120 characters', async () => {
-    const url = 'https://img.example/p.png';
+  test('cuts each refusal or error text from a Trello host to 120 characters', async () => {
+    const url = 'https://trello.com/1/cards/b/attachments/x/download/p.png';
     const d = intercept(deps({ ...clientOnly([{ url }]), imgLoads: false }), u => { if (u === url) return new Response('x'.repeat(500), { status: 500 }); });
     const r = await byId('P5').run(d);
     expect(r.detail).toContain('x'.repeat(100));
@@ -928,6 +942,86 @@ describe('P7', () => {
     expect(d.fields).toEqual([]);
   });
 
+  test('scenario A: the create is accepted but the answer has no id, so the field cannot be deleted and the sentence says so', async () => {
+    const d = clocked();
+    const real = d.fetch;
+    intercept(d, async (url, init) => (init?.method === 'POST' && pathOf(url) === '/1/customFields' ? (await real(url, init), new Response('{}')) : undefined));
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'create:')).toBe('create: the answer had no field id');
+    expect(line(r, 'delete:')).toMatch(/^delete: skipped/);
+    expect(d.fields.map(f => f.name)).toEqual(['mxproof']);
+    expect(r.detail.endsWith(BY_HAND)).toBe(true);
+  });
+  test('scenario B: find refused, the create gets a 409 and the list cannot be read back either: still ends with the sentence', async () => {
+    const d = refuse(clocked({ leftoverField: { options: 2 } }), 'GET', /^\/1\/boards\/board1\/customFields$/, 401, 'unauthorized permission requested');
+    const r = await run(d);
+    expect(line(r, 'delete read back:')).toBe('delete read back: HTTP 401 unauthorized permission requested');
+    expect(r.detail.endsWith(BY_HAND)).toBe(true);
+  });
+  test('the sentence names the field that is actually there: mxproof2 when the read back lists mxproof2', async () => {
+    const d = refuse(refuse(clocked({ leftoverField: { options: 2, name: 'mxproof2' } }), 'PUT', /^\/1\/customFields\/fOld$/, 500, 'nope'), 'DELETE', /^\/1\/customFields\/fOld$/, 500, 'nope');
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(line(r, 'rename leftover back:')).toBe('rename leftover back: HTTP 500 nope');
+    expect(r.detail.endsWith('The field mxproof2 could not be removed: delete it by hand (board menu, Custom Fields).')).toBe(true);
+  });
+  test('nothing is said about removing by hand when nothing was ever created or found', async () => {
+    const d = clocked();
+    d.t.board = (async () => { throw new Error('boom'); }) as typeof d.t.board;
+    const r = await run(d);
+    expect(r.detail).not.toContain('by hand');
+  });
+
+  test('a leftover named mxproof2 is reused: renamed back to mxproof first, and removed at the end', async () => {
+    const d = clocked({ leftoverField: { options: 2, name: 'mxproof2' } });
+    const r = await run(d);
+    expect(r.status).toBe('pass');
+    expect(line(r, 'create:')).toBe('create: skipped, reusing a leftover field');
+    expect(line(r, 'rename leftover back:')).toBe('rename leftover back: ok');
+    expect(line(r, 'rename leftover back read back:')).toBe('rename leftover back read back: ok');
+    expect(sent(d, 'POST', '/1/customFields')).toEqual([]);
+    expect(sent(d, 'PUT', '/1/customFields/fOld')[0]?.body).toEqual({ name: 'mxproof' });
+    expect(d.fields).toEqual([]);
+  });
+  test('only exact names count as a leftover, never a prefix', async () => {
+    for (const name of ['mxproof20', 'mxproof-old', 'Mxproof', 'my mxproof']) {
+      const d = clocked({ leftoverField: { options: 2, name } });
+      const r = await run(d);
+      expect(sent(d, 'POST', '/1/customFields')).toHaveLength(1);
+      expect(line(r, 'create:')).toBe('create: ok');
+      expect(d.fields.map(f => f.name)).toEqual([name]);   // the unrelated field is left alone
+    }
+  });
+
+  test('something unexpected outside any step is recorded as a line, and the REST host line is kept', async () => {
+    const d = clocked();
+    d.t.board = (async () => { throw new Error('boom outside'); }) as typeof d.t.board;   // the first thing P7 does, before any step
+    const r = await run(d);
+    expect(r.status).toBe('fail');
+    expect(lines(r)[0]).toBe('REST host: https://trello.com');
+    expect(line(r, 'unexpected:')).toBe('unexpected: boom outside');
+    expect(r.detail).not.toContain('by hand');          // nothing was created or found
+    expect(d.fields).toEqual([]);
+  });
+
+  test('reads an option back from the options list when the field answer has no options, and says which it used', async () => {
+    const d = intercept(clocked(), (url, init) => {
+      if ((init?.method ?? 'GET') !== 'GET' || pathOf(url) !== '/1/customFields/f1') return undefined;
+      return new Response(JSON.stringify({ id: 'f1', name: d.fields[0]?.name }));
+    });
+    const r = await run(d);
+    expect(r.status).toBe('pass');
+    expect(line(r, 'rename option read back:')).toBe('rename option read back: ok (from the options list)');
+    expect(sent(d, 'GET', '/1/customFields/f1/options')).toHaveLength(1);
+  });
+  test('reads an option back from the field itself when it has options, and says so', async () => {
+    const d = clocked();
+    const r = await run(d);
+    expect(line(r, 'rename option read back:')).toBe('rename option read back: ok (from the field)');
+    expect(sent(d, 'GET', '/1/customFields/f1/options')).toEqual([]);
+  });
+
   test('a refused find still tries to create, and reports a duplicate', async () => {
     const d = refuse(clocked({ leftoverField: { options: 2 } }), 'GET', /^\/1\/boards\/board1\/customFields$/, 401, 'unauthorized permission requested');
     const r = await run(d);
@@ -935,6 +1029,7 @@ describe('P7', () => {
     expect(line(r, 'find:')).toBe('find: HTTP 401 unauthorized permission requested');
     expect(line(r, 'create:')).toMatch(/^create: HTTP 409 .*CUSTOM_FIELD_DUPLICATE_FIELD/);
     for (const step of ['rename option', 'set on card', 'clear on card']) expect(line(r, `${step}:`)).toMatch(/^[a-z ]+: skipped/);
+    expect(r.detail.endsWith(BY_HAND)).toBe(true);
   });
 
   test('the token never appears, even when Trello echoes it, and no request carries key= or token=', async () => {

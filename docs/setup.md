@@ -88,8 +88,9 @@ Do the checks on a copy, never on the real board.
    menu if the top bar has no room). It appears when the variable `PROOF` is
    `1`. For now it is the only button the board shows; the **Matrix** button
    appears when the next stage is deployed.
-5. Make sure at least one card on the test board has a **cover image**. (Open a
-   card, then **Cover**, then pick or upload a picture.) The image check needs
+5. Make sure at least one card on the test board has a **cover image** or an
+   **image attachment**. (Open a card, then **Cover**, then pick or upload a
+   picture; or use **Attachment** to add an image file.) The image check needs
    one.
 
 ## Part 5: Run the checks
