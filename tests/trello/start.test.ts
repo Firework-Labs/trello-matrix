@@ -114,10 +114,13 @@ describe('startMatrix', () => {
     const store = s.mountCalls[0]!.store;
     const param = (await store.load()).parameters[0]!;
     const done = store.setLevel('c0', param, 1).catch((e: unknown) => e as Error);
-    await vi.waitFor(() => expect(s.timers.filter(t => t.ms === 20_000)).toHaveLength(1));
-    s.timers.find(t => t.ms === 20_000)!.fn();
+    // The store's own reads also run under a 20 s timer; those have finished and been cleared by now, so only the request's is live.
+    const live = () => s.timers.filter(t => t.ms === 20_000 && !s.cleared.includes(t.handle));
+    await vi.waitFor(() => expect(live()).toHaveLength(1));
+    const request = live()[0]!;
+    request.fn();
     expect(await done).toMatchObject({ kind: 'network', message: 'Trello did not answer in time.' });
-    expect(s.cleared).toContain(s.timers.find(t => t.ms === 20_000)!.handle);
+    expect(s.cleared).toContain(request.handle);
   });
 
   test('fetch is called as a bare function, not as a method of another object', async () => {

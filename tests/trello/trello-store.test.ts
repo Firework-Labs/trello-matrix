@@ -29,6 +29,8 @@ interface World {
   failGet: (scope: string, vis: string, key: string) => Error | null;
   failSet: (scope: string, vis: string, key: string) => Error | null;
   setGate: Promise<void> | null;                  // t.set waits for this before it takes effect
+  hangSet: ((scope: string, key: string) => boolean) | null;   // a t.set or t.remove for which this is true never answers
+  hangGet: ((scope: string, key: string) => boolean) | null;   // a t.get for which this is true never answers
   ops: Op[];                                  // t.set and t.remove that went through
   log: string[];                              // every write from the store, t and REST, in order
   renderFns: (() => unknown)[];
@@ -66,7 +68,7 @@ function newWorld(): World {
       ],
     },
     permissions: { board: 'write' },
-    cardsImpl: null, failGet: () => null, failSet: () => null, setGate: null,
+    cardsImpl: null, failGet: () => null, failSet: () => null, setGate: null, hangSet: null, hangGet: null,
     ops: [], log: [], renderFns: [], shown: [], cardsCalls: 0, clock: 1_000_000, newIds: 0,
   };
   put(w, 'board', 'shared', KEY_PARAMS, [{ f: 'f1', o: ['oLow', 'oMed', 'oHigh'] }]);
@@ -78,12 +80,14 @@ function newWorld(): World {
 function makeT(w: World): TrelloIframe {
   return {
     async get(scope, vis, key, def) {
+      if (w.hangGet?.(scope, key)) await new Promise(() => {});
       const err = w.failGet(scope, vis, key);
       if (err) throw err;
       const k = dkey(scope, vis, key);
       return w.data.has(k) ? structuredClone(w.data.get(k)) : def;
     },
     async set(scope, vis, key, value) {
+      if (w.hangSet?.(scope, key)) await new Promise(() => {});
       const err = w.failSet(scope, vis, key);
       if (err) throw err;
       if (w.setGate) await w.setGate;
@@ -92,6 +96,7 @@ function makeT(w: World): TrelloIframe {
       put(w, scope, vis, key, value);
     },
     async remove(scope, vis, key) {
+      if (w.hangSet?.(scope, key)) await new Promise(() => {});
       const err = w.failSet(scope, vis, key);
       if (err) throw err;
       w.ops.push({ op: 'remove', scope, vis, key });
@@ -1367,5 +1372,218 @@ describe('connecting and opening cards', () => {
     const { t, st } = setup();
     t.showCard = () => Promise.reject(new Error('boom'));
     expect(await error(st.openCard('c3'))).toMatchObject({ kind: 'network' });
+  });
+});
+
+// ---------------------------------------------------------------- calls that never answer
+
+describe('timeouts', () => {
+  const MESSAGE = 'Trello did not answer in time.';
+
+  /** Starts `p`, lets `ms` pass, and reports whether it has settled by then. */
+  async function settledAfter(p: Promise<unknown>, ms: number): Promise<boolean> {
+    let done = false;
+    void p.then(() => { done = true; }, () => { done = true; });
+    await vi.advanceTimersByTimeAsync(ms);
+    return done;
+  }
+
+  /** `p` (from `error`) must have given up once `ms` have passed; fails with a plain assertion when it is still waiting. */
+  async function givesUpAfter(p: Promise<StoreError>, ms: number): Promise<StoreError> {
+    expect(await settledAfter(p, ms), `still waiting after ${ms} ms`).toBe(true);
+    return p;
+  }
+
+  test('a t.cards that never answers makes load reject after 20 seconds, and the next load works', async () => {
+    const { w, st } = setup();
+    w.cardsImpl = () => new Promise(() => {});
+    const first = error(st.load());
+    expect(await settledAfter(first, 19_999)).toBe(false);
+    expect(await givesUpAfter(first, 1)).toMatchObject({ kind: 'network', message: MESSAGE });
+    w.cardsImpl = null;
+    expect((await st.load()).cards.map(c => c.id)).toEqual(['c1', 'c2', 'c3', 'c4']);
+  });
+
+  test('a read queued behind one that never answers starts when that one times out, and has its own 20 seconds', async () => {
+    const { w, st } = setup();
+    w.cardsImpl = () => new Promise(() => {});
+    const first = error(st.load());
+    await vi.advanceTimersByTimeAsync(10_000);
+    const second = error(st.load());                 // queued: the first read is still running
+    expect(await givesUpAfter(first, 10_000)).toMatchObject({ message: MESSAGE });
+    expect(w.cardsCalls).toBe(2);                    // the second began only now
+    expect(await settledAfter(second, 19_999)).toBe(false);
+    expect(await givesUpAfter(second, 1)).toMatchObject({ kind: 'network', message: MESSAGE });
+  });
+
+  test('a read that answers in time is not cut short, and leaves no timer behind', async () => {
+    const { w, st } = setup();
+    let answer!: (v: unknown) => void;
+    w.cardsImpl = () => new Promise(resolve => { answer = resolve; });
+    const loading = st.load();
+    await vi.advanceTimersByTimeAsync(19_000);
+    answer(structuredClone(w.cards));
+    expect((await loading).cards).toHaveLength(4);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('a late answer from an abandoned read is not delivered, is not remembered and leaves no unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => { unhandled.push(e); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { w, st } = setup();
+      await st.load();                               // the store now knows c1..c4
+      const got: BoardSnapshot[] = [];
+      st.subscribe(s => got.push(s));
+      await vi.advanceTimersByTimeAsync(200);        // the subscription's own read
+      await settle();
+      expect(got).toHaveLength(1);
+
+      let lateAnswer!: (v: unknown) => void;
+      let lateFailure!: (e: unknown) => void;
+      w.cardsImpl = () => new Promise((resolve, reject) => { lateAnswer = resolve; lateFailure = reject; });
+      w.renderFns[0]!();
+      await vi.advanceTimersByTimeAsync(200 + 20_000);
+      await settle();
+      expect(got).toHaveLength(1);
+
+      w.cards.push(rawCard('cLate', 'l1', 400));
+      lateAnswer(structuredClone(w.cards));          // the abandoned read answers at last
+      await settle();
+      expect(got).toHaveLength(1);                   // nothing delivered
+      expect(await error(st.savePositions('cLate', { f1: 0.5 }))).toMatchObject({ kind: 'invalid' });   // and not remembered
+      lateFailure(new Error('too late to matter'));  // a second settle of the same promise changes nothing
+      await new Promise<void>(resolve => { vi.useRealTimers(); setImmediate(resolve); });
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  test('a read that fails after it timed out leaves no unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => { unhandled.push(e); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { w, st } = setup();
+      let fail!: (e: unknown) => void;
+      w.cardsImpl = () => new Promise((_, reject) => { fail = reject; });
+      const loading = error(st.load());
+      await givesUpAfter(loading, 20_000);
+      fail(new Error('late failure'));
+      await settle();
+      await new Promise<void>(resolve => { vi.useRealTimers(); setImmediate(resolve); });
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  test('a t.set that never answers in savePositions rejects after 20 seconds, frees the lock and no longer holds reloads', async () => {
+    const { w, st } = setup();
+    await st.load();
+    const got: BoardSnapshot[] = [];
+    st.subscribe(s => got.push(s));
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    const delivered = got.length;
+    w.hangSet = (scope, key) => scope === 'c2' && key === KEY_CARD;
+    const first = error(st.savePositions('c2', { f1: 0.4 }));
+    w.renderFns[0]!();                               // a reload is asked for while the write is under way
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(got).toHaveLength(delivered);             // held back: a write is under way
+    expect(await settledAfter(first, 9_999)).toBe(false);
+    expect(await givesUpAfter(first, 1)).toMatchObject({ kind: 'network', message: MESSAGE });
+
+    w.hangSet = null;
+    await settle();
+    expect(got.length).toBeGreaterThan(delivered);   // the held reload went ahead once the write ended
+    await st.savePositions('c2', { f1: 0.6 });       // the lock for c2 is free
+    expect(cardValue(w, 'c2')).toEqual({ p: { f1: 0.6 } });
+    w.renderFns[0]!();
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(cardIn(got.at(-1)!, 'c2')).toBeDefined();
+  });
+
+  test('the write-under-way count is released exactly once: a read after a timed-out write is delivered as current', async () => {
+    const { w, st } = setup();
+    await st.load();
+    w.hangSet = (scope, key) => scope === 'c2' && key === KEY_CARD;
+    const failed = error(st.savePositions('c2', { f1: 0.4 }));
+    await givesUpAfter(failed, 20_000);
+    w.hangSet = null;
+    const got: BoardSnapshot[] = [];
+    st.subscribe(s => got.push(s));
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(got).toHaveLength(1);                     // not held by a count that stayed above zero
+    await st.savePositions('c3', { f1: 0.2 });       // and a following write is neither blocked nor miscounted
+    w.renderFns[0]!();
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(got).toHaveLength(2);
+  });
+
+  test('a t.get that never answers when a write reads the stored value rejects after 20 seconds and frees the lock', async () => {
+    const { w, st } = setup();
+    await st.load();
+    w.hangGet = (scope, key) => scope === 'c2' && key === KEY_CARD;
+    const failed = error(st.savePositions('c2', { f1: 0.4 }));
+    expect(await givesUpAfter(failed, 20_000)).toMatchObject({ kind: 'network', message: MESSAGE });
+    expect(w.ops).toEqual([]);
+    w.hangGet = null;
+    await st.savePositions('c2', { f1: 0.7 });
+    expect(cardValue(w, 'c2')).toEqual({ p: { f1: 0.7 } });
+  });
+
+  test('a t.set that never answers for the parameter list rejects after 20 seconds and frees the params lock', async () => {
+    const { w, st } = setup();
+    await st.load();
+    w.hangSet = (scope, key) => scope === 'board' && key === KEY_PARAMS;
+    const failed = error(st.linkParameter('f2', 'last'));
+    expect(await givesUpAfter(failed, 20_000)).toMatchObject({ kind: 'network', message: MESSAGE });
+    w.hangSet = null;
+    expect((await st.linkParameter('f2', 'last')).fieldId).toBe('f2');
+  });
+
+  test('a t.set that never answers for the saved view rejects after 20 seconds', async () => {
+    const { w, st } = setup();
+    w.hangSet = (scope, key) => scope === 'board' && key === KEY_VIEW;
+    const failed = error(st.saveView({ across: null, up: null, listIds: [], colourBy: { kind: 'label' }, showImages: true, zoom: 1, panX: 0, panY: 0 } as ViewSettings));
+    expect(await givesUpAfter(failed, 20_000)).toMatchObject({ kind: 'network', message: MESSAGE });
+  });
+
+  test('a card step of a reorder that never answers stops it after 20 seconds with the marker incomplete, and running it again finishes', async () => {
+    const { w, rest, st } = setup();
+    await st.load();
+    w.hangSet = (scope, key) => scope === 'c1' && key === KEY_CARD;       // the second card's stored value
+    const progress: Progress[] = [];
+    const running = error(st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], p => progress.push(p)));
+    expect(await givesUpAfter(running, 20_000)).toMatchObject({ kind: 'network', message: MESSAGE });
+    expect(progress).toEqual([{ done: 1, total: 3 }]);
+    expect(marker(w)).toEqual({ gen: 'gen-1', complete: false });
+    expect((await st.load()).canUndoReorder).toBe(true);
+
+    w.hangSet = null;
+    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
+    expect(w.newIds).toBe(1);                         // the retry resumed the same reorder
+    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
+    expect(cardValue(w, 'c3')).toEqual({ prev: 300, gen: 'gen-1' });     // not overwritten
+    expect(rest.calls.map(c => c.args.join(':'))).toEqual(['c3:16384', 'c1:32768', 'c2:49152']);
+  });
+
+  test('the marker write that never answers stops a reorder before any card is touched', async () => {
+    const { w, rest, st } = setup();
+    await st.load();
+    w.hangSet = (scope, key) => scope === 'board' && key === KEY_REORDER;
+    const running = error(st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1'] }], () => {}));
+    expect(await givesUpAfter(running, 20_000)).toMatchObject({ kind: 'network', message: MESSAGE });
+    expect(rest.calls).toEqual([]);
+    expect(w.ops).toEqual([]);
+    w.hangSet = null;
+    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1'] }], () => {});       // the lock for reorders is free
+    expect(marker(w)).toEqual({ gen: 'gen-2', complete: true });                      // no marker was stored before, so this is a new reorder
   });
 });

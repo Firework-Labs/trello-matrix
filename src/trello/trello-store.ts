@@ -20,6 +20,13 @@ import { coverUrls, toSnapshot, type RawBoardData } from './snapshot';
 /** Reads that follow a render or a subscription are made this long after the first of them, so a burst makes one. */
 const RELOAD_DELAY_MS = 200;
 
+/**
+ * A read, or one call to Trello's plugin storage, that has not answered by now is given up on. Without this, one call that
+ * never answers would hold every later read behind it, and a write's lock and "under way" count for good.
+ */
+const CALL_TIMEOUT_MS = 20_000;
+const TIMED_OUT = 'Trello did not answer in time.';
+
 const LIMIT_MESSAGE = "Trello's 4,096-character limit for stored data was reached.";
 const RENAME_MESSAGE = "Trello does not let the matrix rename fields. Rename it in Trello's Custom Fields editor.";
 const NOT_CREATED = "Trello would not create the field. Create a dropdown field with that name in Trello's Custom Fields editor, then add it here to link it.";
@@ -77,6 +84,21 @@ export function createTrelloStore(o: {
 }): BoardStore {
   const { t, rest, auth } = o;
   const overlay = createOverlay({ now: o.now });
+
+  /**
+   * `work`'s result, or a network error once CALL_TIMEOUT_MS have passed. An answer or a failure of `work` after that is
+   * dropped: it is not passed on, and (being handled here) it is never an unhandled rejection.
+   */
+  function timed<T>(work: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let over = false;
+      const handle = o.setTimeout(() => { over = true; reject(new StoreError('network', TIMED_OUT)); }, CALL_TIMEOUT_MS);
+      work.then(
+        value => { if (!over) { over = true; o.clearTimeout(handle); resolve(value); } },
+        error => { if (!over) { over = true; o.clearTimeout(handle); reject(error); } },
+      );
+    });
+  }
 
   // What the latest read that no write of ours overlapped showed. `base` is before the overlay, so applying the
   // overlay to it again always gives the same result plus any writes noted since.
@@ -155,7 +177,7 @@ export function createTrelloStore(o: {
   function read(): Promise<ReadResult> {
     const run = async (): Promise<ReadResult> => {
       const startedAt = epoch;
-      const { data, unreadable } = await gather();
+      const { data, unreadable } = await timed(gather());     // an answer that comes after the limit is dropped here: nothing below sees it
       const snapshot = toSnapshot(data);
       const params = decodeParams(data.params);
       const shown = overlay.apply(snapshot, params);
@@ -191,19 +213,23 @@ export function createTrelloStore(o: {
   // ------------------------------------------------------------ plugin storage
 
   async function getKey(scope: string, visibility: 'shared' | 'private', key: string): Promise<unknown> {
-    try { return await t.get(scope, visibility, key); } catch { throw new StoreError('network', 'Could not read from Trello.'); }
+    try {
+      return await timed(call(() => t.get(scope, visibility, key)));
+    } catch (e) {
+      throw e instanceof StoreError ? e : new StoreError('network', 'Could not read from Trello.');
+    }
   }
   async function setKey(scope: string, visibility: 'shared' | 'private', key: string, value: unknown): Promise<void> {
     assertFits(value);
-    await step(async () => { try { await t.set(scope, visibility, key, value); } catch (e) { throw saveError(e); } });
+    await step(async () => { try { await timed(call(() => t.set(scope, visibility, key, value))); } catch (e) { throw saveError(e); } });
   }
   /** Stores the saved view. It cannot change a snapshot, so it is not counted as a write that reads must wait for. */
   async function setView(value: unknown): Promise<void> {
     assertFits(value);
-    try { await t.set('board', 'private', KEY_VIEW, value); } catch (e) { throw saveError(e); }
+    try { await timed(call(() => t.set('board', 'private', KEY_VIEW, value))); } catch (e) { throw saveError(e); }
   }
   async function removeKey(scope: string, visibility: 'shared' | 'private', key: string): Promise<void> {
-    await step(async () => { try { await t.remove(scope, visibility, key); } catch (e) { throw saveError(e); } });
+    await step(async () => { try { await timed(call(() => t.remove(scope, visibility, key))); } catch (e) { throw saveError(e); } });
   }
 
   function updateCard(cardId: string, change: (stored: StoredCard) => StoredCard | null | typeof KEEP): Promise<void> {
