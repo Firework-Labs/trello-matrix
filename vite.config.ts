@@ -1,18 +1,14 @@
+import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
-import { resolve } from 'node:path';
+import { buildInputs } from './build-inputs';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   test: { include: ['tests/**/*.test.ts'] },   // e2e/*.spec.ts belongs to Playwright
   base: process.env.VITE_BASE ?? '/trello-matrix/',
   build: {
     rollupOptions: {
-      input: {
-        index: resolve(import.meta.dirname, 'index.html'),
-        matrix: resolve(import.meta.dirname, 'matrix.html'),
-        'oauth-callback': resolve(import.meta.dirname, 'oauth-callback.html'),
-        proof: resolve(import.meta.dirname, 'proof.html'),
-        dev: resolve(import.meta.dirname, 'dev.html'),
-      },
+      // proof.html is part of the site only when the build is made with VITE_PROOF=1 (see build-inputs.ts).
+      input: buildInputs(import.meta.dirname, loadEnv(mode, import.meta.dirname, 'VITE_')),
     },
   },
-});
+}));

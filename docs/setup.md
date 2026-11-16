@@ -65,7 +65,8 @@ Words used here:
    - Name `PROOF`, value: `1`
      (This adds a "Matrix checks" button to the board, next to the **Matrix**
      button. It is for the first test only. When the checks are finished,
-     change the value to `0` and publish again to remove it.)
+     change the value to `0` (do not delete it) and publish again to remove
+     it. With any other value the checks page is not published at all.)
 3. Publish the site again, so it picks up the two values. The site was already
    published once, automatically, when the code was first put on GitHub. That
    copy was made before the values existed, so it has no Client ID in it.

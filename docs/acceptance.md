@@ -73,6 +73,18 @@ for itself.
 
 ## After it passes
 
+Do these steps in this order. The first three come before anything is switched
+on for the real board, because the **Matrix checks** page writes to whichever
+board it is opened on.
+
+1. In the repository, go to **Settings**, then **Secrets and variables**, then
+   **Actions**, then the **Variables** tab. Change the variable `PROOF` to `0`
+   (do not delete it).
+2. Open the **Actions** tab, click **Publish to GitHub Pages**, press **Run
+   workflow**, and wait for the green tick.
+3. Open the test board. Check that the **Matrix checks** button is gone (look
+   under the "…" menu too). If it is still there, do not go on: tell the agent.
+
 The Power-Up is switched on for the real board (`67-Pass-Play-Teamwork`) only
-after this checklist passes in both browsers. Mike does that himself. Nobody
-else switches it on.
+after this checklist passes in both browsers and the three steps above are
+done. Mike does that himself. Nobody else switches it on.

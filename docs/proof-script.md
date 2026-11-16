@@ -105,7 +105,8 @@ Trello address worked, and any error Trello gave.
 
 ## After the checks
 
-Tell the agent you have finished. When it says so, delete the `PROOF`
-variable in the repository (Settings, Secrets and variables, Actions,
-Variables), then re-run the latest publish in the Actions tab. The "Matrix
-checks" button then disappears from the board.
+Tell the agent you have finished. When it says so, set the `PROOF` variable
+in the repository to `0` (Settings, Secrets and variables, Actions, Variables;
+change it, do not delete it), then re-run the latest publish in the Actions
+tab. The "Matrix checks" button then disappears from the board, and the checks
+page is no longer part of the published site.
