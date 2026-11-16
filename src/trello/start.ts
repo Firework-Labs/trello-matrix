@@ -40,3 +40,48 @@ export async function startMatrix(deps: StartDeps): Promise<{ destroy(): void }>
     canRenameParameters: CAN_RENAME_FIELDS,
   });
 }
+
+/** What the page shows when the matrix cannot start. Fixed: nothing Trello or the browser said is ever put on the page. */
+export const COULD_NOT_START = 'The matrix could not start. Close this window and open it again.';
+
+/** The real parts of the page, as `src/matrix-main.ts` passes them in (and a test replaces them). */
+export interface BootEnv {
+  window: {
+    TrelloPowerUp?: StartDeps['powerUp'] | null;   // missing when Trello's library did not load
+    fetch: typeof fetch;
+    performance: { now(): number };
+    crypto: { randomUUID(): string };
+    setTimeout(fn: () => void, ms: number): unknown;
+    clearTimeout(handle: unknown): void;
+  };
+  document: { getElementById(id: string): HTMLElement | null; body: HTMLElement };
+  mount: typeof mountMatrix;
+}
+
+/**
+ * Starts the matrix on the page. Whatever goes wrong (the library missing, no #app, a throw, a rejection) ends the
+ * same way: the fixed sentence on the page and nothing else. It never rejects and never logs.
+ */
+export async function bootMatrix(env: BootEnv): Promise<void> {
+  let target: HTMLElement | null = null;
+  try {
+    target = env.document.getElementById('app');
+    if (target === null) { env.document.body.textContent = COULD_NOT_START; return; }
+    const { window: w } = env;
+    const powerUp = w.TrelloPowerUp;
+    if (!powerUp || typeof powerUp.iframe !== 'function') throw new Error('The Power-Up library is missing.');
+    await startMatrix({
+      powerUp,
+      root: target,
+      fetch: w.fetch.bind(w),
+      mount: env.mount,
+      now: () => w.performance.now(),
+      sleep: ms => new Promise<void>(resolve => { w.setTimeout(resolve, ms); }),
+      setTimeout: (fn, ms) => w.setTimeout(fn, ms),
+      clearTimeout: handle => { w.clearTimeout(handle); },
+      newId: () => w.crypto.randomUUID(),
+    });
+  } catch {
+    try { (target ?? env.document.body).textContent = COULD_NOT_START; } catch { /* nothing more can be done */ }
+  }
+}

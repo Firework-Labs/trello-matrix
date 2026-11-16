@@ -89,20 +89,21 @@ export function createRest(o: {
   /** One HTTP request, paced. Nothing is sent when there is no token. */
   function attempt(method: string, path: string, query: Record<string, string> | undefined, body: unknown): Promise<Answer> {
     return o.pacer.run(async () => {
-      let token: string | null;
-      try { token = await o.auth.accessToken(); } catch { token = null; }
-      if (token === null) throw new StoreError('auth', 'Not signed in to Trello.');
-      const url = new URL(path, base);
-      for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
-      const address = url.toString();
-      const headers: Record<string, string> = authHeaders(address, token);
-      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      // The 20 s cover the token read as well, so a token call that never answers cannot hold the pacer either.
       const controller = new AbortController();
       let timer: unknown;
       const timedOut = new Promise<never>((_, reject) => {
         timer = startTimer(() => { controller.abort(); reject(new StoreError('network', TIMED_OUT)); }, REQUEST_TIMEOUT_MS);
       });
       const exchange = (async (): Promise<Answer> => {
+        let token: string | null;
+        try { token = await o.auth.accessToken(); } catch { token = null; }
+        if (token === null) throw new StoreError('auth', 'Not signed in to Trello.');
+        const url = new URL(path, base);
+        for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
+        const address = url.toString();
+        const headers: Record<string, string> = authHeaders(address, token);
+        if (body !== undefined) headers['Content-Type'] = 'application/json';
         const res = await doFetch(address, {
           method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal,
         });

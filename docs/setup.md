@@ -123,6 +123,11 @@ needs a Trello account that is linked to an Atlassian account.
 - **"Matrix checks" opens but the page says it was built without a Trello
   client ID**: the `TRELLO_CLIENT_ID` variable is missing or has a typing
   mistake. After fixing it, re-run the publish.
+- **The Matrix page opens but "Connect to Trello" fails or the sign-in window
+  does not open properly**: the `TRELLO_CLIENT_ID` variable may be missing or
+  have a typing mistake. (Only the **Matrix checks** page says so in words; the
+  Matrix page just fails at this step.) Check the variable in Part 3, then
+  re-run the publish.
 - **The sign-in window shows an error about the redirect or callback
   address**: the callback URL in Part 2 step 6 does not match exactly. Check
   for a missing `https://`, a stray space, or a missing `oauth-callback.html`

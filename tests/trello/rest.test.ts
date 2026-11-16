@@ -373,6 +373,30 @@ describe('the timeout', () => {
     await expect(restWithFake({ throws: true }).rest.setCardPos('c', 1)).rejects.toMatchObject({ message: 'Could not reach Trello.' });
     expect(vi.getTimerCount()).toBe(0);
   });
+  test('a token read that never settles also times out after 20 s, and the pacer is free for the next call', async () => {
+    vi.useFakeTimers();
+    let tokenCalls = 0;
+    const auth: TrelloAuth = {
+      authorize: async () => {}, isAuthorized: async () => true,
+      accessToken: () => (tokenCalls++ === 0 ? new Promise<string | null>(() => {}) : Promise.resolve('TOKEN')),
+    };
+    const requests: string[] = [];
+    const fetchImpl = (async (input: unknown) => { requests.push(String(input)); return new Response('{}'); }) as typeof fetch;
+    // A real one-at-a-time pacer: a call that never ends would hold every later one.
+    let tail: Promise<unknown> = Promise.resolve();
+    const pacer: Pacer = { run: fn => { const r = tail.then(fn); tail = r.catch(() => undefined); return r; } };
+    const rest = createRest({ auth, fetch: fetchImpl, pacer, sleep: async () => {} });
+    const first = rest.setCardPos('c1', 1).catch((e: unknown) => e as Error);
+    const second = rest.setCardPos('c2', 2);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(requests).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await first).toMatchObject({ name: 'StoreError', kind: 'network', message: 'Trello did not answer in time.' });
+    await second;
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain('/1/cards/c2');
+    expect(vi.getTimerCount()).toBe(0);
+  });
   test('a timeout is not retried', async () => {
     vi.useFakeTimers();
     const { fetchImpl, signals } = hangingFetch();

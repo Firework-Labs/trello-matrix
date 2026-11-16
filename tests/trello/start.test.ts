@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { CLIENT_ID, REDIRECT_URI } from '../../src/config';
 import type { BoardStore } from '../../src/store/board-store';
 import { KEY_PARAMS } from '../../src/trello/plugin-data';
-import { startMatrix, type StartDeps } from '../../src/trello/start';
+import { COULD_NOT_START, bootMatrix, startMatrix, type BootEnv, type StartDeps } from '../../src/trello/start';
 
 const CARDS = 85;
 const opt = (id: string, text: string, pos: number) => ({ id, value: { text }, color: 'none', pos });
@@ -131,10 +131,116 @@ describe('startMatrix', () => {
     expect(receivers[0]).toBeUndefined();
   });
 
-  test('nothing in the start-up writes to the page address or logs', async () => {
+  test('start-up logs nothing, even when the start fails', async () => {
     const spies = (['log', 'warn', 'error', 'info', 'debug'] as const).map(m => vi.spyOn(console, m).mockImplementation(() => undefined));
-    await startMatrix(setup().deps);
-    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
-    vi.restoreAllMocks();
+    try {
+      await startMatrix(setup().deps);
+      const failing = setup();
+      failing.deps.mount = (async () => { throw new Error('secret'); }) as StartDeps['mount'];
+      await startMatrix(failing.deps).catch(() => undefined);
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+describe('bootMatrix', () => {
+  const SENTENCE = 'The matrix could not start. Close this window and open it again.';
+
+  interface FakeEl { textContent: string | null; id: string }
+  function bootSetup(o: {
+    library?: unknown; appMissing?: boolean; mountThrows?: unknown; iframeThrows?: unknown; mountRejects?: unknown;
+  } = {}) {
+    const app: FakeEl = { textContent: '', id: 'app' };
+    const body: FakeEl = { textContent: '', id: 'body' };
+    const mounts: { root: unknown }[] = [];
+    const iframes: unknown[] = [];
+    const library = 'library' in o
+      ? o.library
+      : { iframe: (options: unknown) => { iframes.push(options); if (o.iframeThrows) throw o.iframeThrows; return fakeIframe(); } };
+    const env: BootEnv = {
+      window: {
+        TrelloPowerUp: library as BootEnv['window']['TrelloPowerUp'],
+        fetch: (async () => new Response('{}')) as typeof fetch,
+        performance: { now: () => 0 },
+        crypto: { randomUUID: () => 'id1' },
+        setTimeout: () => ({}), clearTimeout: () => {},
+      },
+      document: {
+        getElementById: (id: string) => (id === 'app' && !o.appMissing ? (app as unknown as HTMLElement) : null),
+        body: body as unknown as HTMLElement,
+      },
+      mount: (async (root: HTMLElement) => {
+        mounts.push({ root });
+        if (o.mountRejects) throw o.mountRejects;
+        return { destroy() {} };
+      }) as BootEnv['mount'],
+    };
+    return { env, app, body, mounts, iframes };
+  }
+
+  test('starts the matrix on #app and shows nothing of its own when all is well', async () => {
+    const b = bootSetup();
+    await bootMatrix(b.env);
+    expect(b.mounts).toEqual([{ root: b.app }]);
+    expect(b.app.textContent).toBe('');
+    expect(b.body.textContent).toBe('');
+  });
+
+  test('the sentence is the fixed one', () => {
+    expect(COULD_NOT_START).toBe(SENTENCE);
+  });
+
+  test.each([['missing', undefined], ['null', null], ['without iframe', {}]])('a Power-Up library that is %s shows the sentence on the page', async (_name, library) => {
+    const b = bootSetup({ library });
+    await bootMatrix(b.env);
+    expect(b.app.textContent).toBe(SENTENCE);
+    expect(b.mounts).toEqual([]);
+  });
+
+  test('a window with no TrelloPowerUp property at all shows the sentence', async () => {
+    const b = bootSetup();
+    delete (b.env.window as { TrelloPowerUp?: unknown }).TrelloPowerUp;
+    await bootMatrix(b.env);
+    expect(b.app.textContent).toBe(SENTENCE);
+  });
+
+  test('without #app the sentence goes in the body, and the matrix is not started', async () => {
+    const b = bootSetup({ appMissing: true });
+    await bootMatrix(b.env);
+    expect(b.body.textContent).toBe(SENTENCE);
+    expect(b.app.textContent).toBe('');
+    expect(b.mounts).toEqual([]);
+  });
+
+  test('an iframe() that throws shows the sentence only, never its message', async () => {
+    const b = bootSetup({ iframeThrows: new Error('token abc123 leaked') });
+    await bootMatrix(b.env);
+    expect(b.app.textContent).toBe(SENTENCE);
+  });
+
+  test('a start that rejects shows the sentence only, never its message', async () => {
+    const b = bootSetup({ mountRejects: new Error('Bearer abc123') });
+    await bootMatrix(b.env);
+    expect(b.app.textContent).toBe(SENTENCE);
+  });
+
+  test('a throw that is not an Error is handled too', async () => {
+    const b = bootSetup({ iframeThrows: 'abc123' });
+    await bootMatrix(b.env);
+    expect(b.app.textContent).toBe(SENTENCE);
+  });
+
+  test('bootMatrix itself never rejects and never logs', async () => {
+    const spies = (['log', 'warn', 'error', 'info', 'debug'] as const).map(m => vi.spyOn(console, m).mockImplementation(() => undefined));
+    try {
+      for (const o of [{ library: undefined }, { appMissing: true }, { iframeThrows: new Error('x') }, { mountRejects: new Error('y') }]) {
+        await expect(bootMatrix(bootSetup(o).env)).resolves.toBeUndefined();
+      }
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
