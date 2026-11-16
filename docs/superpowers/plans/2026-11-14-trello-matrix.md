@@ -38,6 +38,38 @@ this plan through these replacements:
   creates the iframe with the two options above.
 - Live checks are P1 to P8; P3 signs in with OAuth 2.0 and finds the REST host.
 
+## Amendment 2, 2026-11-16: what the live checks decided (Tasks 13 and 14 revised)
+
+The Chrome round of the live checks is recorded in `docs/proof-results.md`.
+It changes Tasks 13 and 14 below. Where their text disagrees with this
+section, this section wins.
+
+- **Live updates work** (P2), so the Trello store uses Trello's render
+  callback only. There is no polling mode and no snapshot built from REST.
+  Hidden card data cannot be read through REST with the OAuth token (P8).
+- **REST** uses `https://api.trello.com` with the Bearer header (P3). The REST
+  client has three calls only: create a dropdown field, set or clear a
+  dropdown value on a card, set a card's list position. Numeric positions
+  work; about nine moves a second pass without refusals (P6).
+- **Renaming and deleting fields and options is refused** for OAuth 2.0 tokens
+  (P7, HTTP 403 "missing scopes"). `renameParameter` and `renameLevel` reject
+  with a permission error, and the dialog shows parameter and level names
+  read-only with a pointer to Trello's Custom Fields editor.
+- **Cover images** load with a plain image tag from the address in the
+  Power-Up's own card data, where `cover` is the cover attachment (`previews`,
+  `url`). No token, no REST (P5).
+- **The Power-Up's own data lags a REST write** by about a quarter of a second
+  (P7), so the store lays its own recent REST writes over what it reads until
+  the data agrees.
+- **Trello closes the matrix when a card opens** (P4). The saved view and the
+  "Show on matrix" card button are the way back.
+- Creating a field with the OAuth token is not yet proven (a leftover test
+  field got in the way). If Trello refuses it, the person creates the dropdown
+  field in Trello and links it from the dialog, which already exists.
+- Task 14 is split into 14a (pure mapping and overlay), 14b (the store) and
+  14c (the matrix page, the dialog's read-only names, configuration, setup
+  notes). The task briefs in the run workspace carry the exact interfaces.
+
 ## Global Constraints
 
 - Node 22 or later. No runtime dependencies; dev dependencies only (`typescript`, `vite`, `vitest`, `@playwright/test`).
