@@ -3,7 +3,8 @@
 
 type TrelloVisibility = 'shared' | 'private';
 
-interface TrelloContext { board: string; card?: string; member: string; [key: string]: unknown }
+// `permissions` is what the person may do in this context ('write' or 'read' for the board); its shape is read defensively.
+interface TrelloContext { board: string; card?: string; member: string; permissions?: unknown; [key: string]: unknown }
 
 interface TrelloOAuth2Client {
   /** Opens the consent window. The documentation does not say what it resolves with, so treat it as unknown. */

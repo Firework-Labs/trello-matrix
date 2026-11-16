@@ -1,7 +1,10 @@
 import { clampPosition } from '../model/placement';
 import { positionsFor } from '../model/resequence';
-import type { BoardSnapshot, Card, DropdownField, ParamId, Parameter, ViewSettings } from '../model/types';
+import type { BoardSnapshot, Card, DropdownField, ViewSettings } from '../model/types';
 import { StoreError, type BoardStore, type ListOrder, type NewParameter, type Progress } from './board-store';
+import {
+  parameterFromField, parameterNamed, validateLink, validateNewParameter, validateRenameLevel, validateRenameParameter,
+} from './parameter-rules';
 import { sampleSnapshot } from './sample-data';
 
 export interface FakeStore extends BoardStore {
@@ -69,30 +72,6 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
     if (!card) throw invalid(`No card ${cardId}`);
     return card;
   };
-  const parameterNamed = (id: ParamId): { param: Parameter; field: DropdownField | undefined } => {
-    const param = board.parameters.find(p => p.id === id);
-    if (!param) throw invalid(`No parameter ${id}`);
-    return { param, field: board.dropdownFields.find(f => f.id === param.fieldId) };
-  };
-  const cleanName = (name: string, what: string): string => {
-    const trimmed = name.trim();
-    if (trimmed === '') throw invalid(`${what} needs a name`);
-    return trimmed;
-  };
-  const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-  /** A parameter name must be unique among parameters and among dropdown fields (a field that is not a parameter still holds its name). */
-  const checkParameterNameFree = (name: string, exceptId?: ParamId) => {
-    if (board.parameters.some(p => p.id !== exceptId && sameName(p.name, name))) throw invalid(`There is already a parameter called ${name}`);
-    if (board.dropdownFields.some(f => f.id !== exceptId && sameName(f.name, name))) throw invalid(`There is already a field called ${name}`);
-  };
-  /** Levels worst to best from options in field order. */
-  const parameterFromField = (field: DropdownField, bestEnd: 'first' | 'last'): Parameter => {
-    const options = bestEnd === 'first' ? [...field.options].reverse() : [...field.options];
-    return {
-      id: field.id, name: field.name, fieldId: field.id,
-      levels: options.map(opt => opt.text), optionIds: options.map(opt => opt.id),
-    };
-  };
   const uniqueFieldId = (name: string): string => {
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'field';
     let id = `f-${slug}`;
@@ -148,12 +127,7 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
 
     async createParameter(input: NewParameter) {
       enter('createParameter', [input]);
-      const name = cleanName(input.name, 'A parameter');
-      const typed = input.levels.map(l => l.trim());
-      if (typed.length < 2 || typed.length > 3) throw invalid('A parameter has 2 or 3 levels');
-      if (typed.some(l => l === '')) throw invalid('Every level needs a name');
-      if (new Set(typed.map(l => l.toLowerCase())).size !== typed.length) throw invalid('Level names must differ');
-      checkParameterNameFree(name);
+      const { name, levels: typed } = validateNewParameter(board, input);
       const id = uniqueFieldId(name);
       const field: DropdownField = {
         id, name, options: typed.map((text, i) => ({ id: `${id}-o${i}`, text, colour: 'none' })),
@@ -166,11 +140,7 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
 
     async linkParameter(fieldId, bestEnd) {
       enter('linkParameter', [fieldId, bestEnd]);
-      const field = board.dropdownFields.find(f => f.id === fieldId);
-      if (!field) throw invalid(`No dropdown field ${fieldId}`);
-      if (board.parameters.some(p => p.fieldId === fieldId)) throw invalid(`${field.name} is already a parameter`);
-      if (field.options.length < 2 || field.options.length > 3) throw invalid('A parameter has 2 or 3 levels');
-      checkParameterNameFree(field.name, field.id);
+      const field = validateLink(board, fieldId);
       const param = parameterFromField(field, bestEnd);
       board.parameters.push(param);
       return structuredClone(param);
@@ -178,20 +148,17 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
 
     async renameParameter(id, name) {
       enter('renameParameter', [id, name]);
-      const { param, field } = parameterNamed(id);
-      const clean = cleanName(name, 'A parameter');
-      checkParameterNameFree(clean, id);
+      const clean = validateRenameParameter(board, id, name);
+      const { param, field } = parameterNamed(board, id);
       param.name = clean;
       if (field) field.name = clean;
     },
 
     async renameLevel(id, level, name) {
       enter('renameLevel', [id, level, name]);
-      const { param, field } = parameterNamed(id);
+      const clean = validateRenameLevel(board, id, level, name);
+      const { param, field } = parameterNamed(board, id);
       const optionId = param.optionIds[level];
-      if (!Number.isInteger(level) || optionId === undefined) throw invalid(`${param.name} has no level ${level}`);
-      const clean = cleanName(name, 'A level');
-      if (param.levels.some((l, i) => i !== level && sameName(l, clean))) throw invalid(`Another level is already called ${clean}`);
       param.levels[level] = clean;
       const option = field?.options.find(opt => opt.id === optionId);
       if (option) option.text = clean;
@@ -199,7 +166,7 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
 
     async removeParameter(id) {
       enter('removeParameter', [id]);
-      parameterNamed(id);
+      parameterNamed(board, id);
       board.parameters = board.parameters.filter(p => p.id !== id);
       // Removes it from the matrix only: the field, the cards' values and their stored
       // positions all stay, so linking the field again restores every card's exact spot.
