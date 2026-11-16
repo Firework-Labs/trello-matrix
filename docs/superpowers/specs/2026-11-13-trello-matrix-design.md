@@ -26,6 +26,34 @@ follows:
   (now P1 to P8) are what settles each of these. The legacy key is still
   supported by Trello with no end date, and is the fallback if a check fails.
 
+## Amendment 2, 2026-11-16: what the live checks decided
+
+The live checks on the test board are written up in
+[docs/proof-results.md](../../proof-results.md). They changed four things in
+this document, and they add one thing it did not cover:
+
+- **Renaming is done in Trello, not in the matrix (section 7.2).** Trello
+  refuses to rename a dropdown field or one of its options with the sign-in
+  the matrix uses. A parameter or a level is renamed in Trello's Custom Fields
+  editor, and the matrix shows the new name. The matrix can still add a
+  parameter, link an existing field, remove a parameter from the matrix
+  (the field stays in Trello), and set or clear a card's level.
+- **Live updates use Trello's own change notice, with no polling fallback
+  (section 10).** When someone else changes the board, Trello tells the open
+  matrix and it reads the board again. Hidden card data cannot be read through
+  Trello's web address with this sign-in, so a fallback that checks every few
+  seconds could not work, and none was built.
+- **Cover images load with a plain image tag.** The matrix uses the preview
+  address Trello gives for the card's cover. It does not fetch the image with
+  the sign-in, because the browser blocks that.
+- **Reorder and undo are for one person at a time.** Two people should not press
+  **Reorder in Trello** or **Undo last reorder** at the same time. If they do,
+  the last one wins, and an undo may then put back only some of the cards.
+- **A sign-in can lapse.** Whether Trello's library renews the one-hour access
+  by itself was never proved. If it does not, the matrix shows a bar at the top,
+  "Trello sign-in has expired.", with a **Connect to Trello** button. What
+  failed is not repeated for the person; they connect and carry on.
+
 ## 1. Intent
 
 Mike has 80–90 items in the backlog of the `67-Pass-Play-Teamwork` Trello board

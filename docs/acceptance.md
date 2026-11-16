@@ -3,11 +3,15 @@
 This is for Mike and the people helping him. Run it on the **test board**
 (`Matrix test`), never on the real board. It takes about an hour.
 
-Run the full list (lines 1 to 15) once, in **Chrome**. It sets the board up, so
+Run the full list (lines 1 to 17) once, in **Chrome**. It sets the board up, so
 it cannot be run a second time on the same board. Then run the short **Second
 browser (Safari)** list, which is written for the board as the Chrome run left
 it. The matrix remembers each person's lists, axes and zoom in Trello, not in
 the browser, so Safari opens where Chrome left off.
+
+Do not press **Reorder in Trello** or **Undo last reorder** on two computers at
+the same time. The last one wins, and an undo may then put back only some of
+the cards.
 
 The people:
 
@@ -46,6 +50,8 @@ words if anything looked odd. Fill in one table for Chrome and one for Safari.
 | 13 | Person A presses **Resequence lists…** and reads the preview. If it says "The lists are already in this order.", close it with **Cancel**, move a card to a different section as in line 12, and try again. Press **Reorder in Trello**. Look at the lists in Trello. Then press **Resequence lists…** again and press **Undo last reorder**. | The cards in the Trello lists are in the order the preview showed. After **Undo last reorder** they are back as they were. | |
 | 14 | The observer opens the board, presses **Matrix** and presses **Connect to Trello** (allowing access). They press the **Lists** button, tick the same lists as Person A, and press **Swap axes**. They try to drag a card, and then click a card. If a message such as "Couldn't save your view" appears, write it down; it does not make this line a fail, but we want to know. | The matrix shows the cards. The **Parameters…** and **Resequence lists…** buttons are not there. The dragged card does not move, and nothing changes in Trello. Clicking a card opens the real card. | |
 | 15 | Person A sets **Colour by**, the lists and the zoom to something distinctive, waits five seconds, then closes the matrix and presses **Matrix** again. | It opens as it was left: the same lists, the same **Across** and **Up**, the same colouring and the same zoom. | |
+| 16 | More than an hour after connecting (leave the browser open and come back), drag a card to another section. | The card moves and its fields change as before. Or, if a bar "Trello sign-in has expired." appears at the top, press **Connect to Trello** in it and try the drag again, and write down that the bar appeared. | |
+| 17 | Person A presses **Resequence lists…** on a board with many cards, and then **Reorder in Trello**. While it runs, Person B has the matrix open and tries to pan, zoom and drag a card. | B's matrix stays usable while A's reorder runs. Write down if it stutters or freezes. | |
 
 ## Second browser (Safari)
 
