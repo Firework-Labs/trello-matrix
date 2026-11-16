@@ -256,6 +256,27 @@ describe('coverUrlOf', () => {
     for (const junk of [null, undefined, 5, 'x', [], {}]) expect(coverUrlOf(junk)).toBeNull();
   });
 
+  test('what is returned is the checked, canonical form of the address', () => {
+    expect(coverUrlOf({ url: ' https://x/y.png' })).toBe('https://x/y.png');
+    expect(coverUrlOf({ url: 'HTTPS://X/y.png' })).toBe('https://x/y.png');
+    expect(coverUrlOf({ url: 'https:/x/y.png' })).toBe('https://x/y.png');
+    expect(coverUrlOf({ url: 'https:x/y.png' })).toBe('https://x/y.png');
+    expect(coverUrlOf({ url: 'ht\ntps://h/x' })).toBe('https://h/x');
+    expect(coverUrlOf({ url: 'https://h/a b.png' })).toBe('https://h/a%20b.png');
+    expect(coverUrlOf({ previews: [{ url: ' HTTPS://h/p.png', width: 100 }] })).toBe('https://h/p.png');
+    expect(coverUrlOf({ scaled: [{ url: 'https:/h/s.png', width: 100 }] })).toBe('https://h/s.png');
+  });
+
+  test('an address with credentials, or without a host, is not accepted', () => {
+    expect(coverUrlOf({ url: 'https://u:p@h/x.png' })).toBeNull();
+    expect(coverUrlOf({ url: 'https://u@h/x.png' })).toBeNull();
+    expect(coverUrlOf({ url: 'https://:p@h/x.png' })).toBeNull();
+    expect(coverUrlOf({ previews: [{ url: 'https://u:p@h/p.png', width: 100 }], url: 'https://h/own.png' })).toBe('https://h/own.png');
+    expect(coverUrlOf({ url: '//host/x' })).toBeNull();
+    expect(coverUrlOf({ url: '/x/y.png' })).toBeNull();
+    expect(coverUrlOf({ url: 'x/y.png' })).toBeNull();
+  });
+
   test('a string that only looks like https is not accepted', () => {
     expect(coverUrlOf({ url: 'https:' })).toBeNull();
     expect(coverUrlOf({ url: 'not a url' })).toBeNull();
@@ -274,6 +295,14 @@ describe('coverUrls', () => {
       'junk',
     ]);
     expect(urls).toEqual({ a: 'https://trello.com/p/600', c: 'https://t/c.png' });
+  });
+
+  test('addresses are returned in canonical form, and ones with credentials are left out', () => {
+    expect(coverUrls([
+      { id: 'a', cover: { url: ' HTTPS://h/a.png' } },
+      { id: 'b', cover: { url: 'https://u:p@h/b.png' } },
+      { id: 'c', cover: { url: 'https:/h/c.png' } },
+    ])).toEqual({ a: 'https://h/a.png', c: 'https://h/c.png' });
   });
 
   test('junk gives an empty object, and an id of __proto__ is not a key', () => {

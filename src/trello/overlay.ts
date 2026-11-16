@@ -19,8 +19,13 @@ export interface Overlay {
 /** A write we made. `before` holds every value the snapshot may still show from before it took effect. */
 interface Note<V> { value: V; before: Set<V>; at: number }
 
-/** What a note says about the value the snapshot shows now: it has arrived, it is still the old one, or it is someone else's. */
+/**
+ * What a note says about the value the snapshot shows now: it has arrived (forget the note), it is stale (lay our
+ * value over it and keep the note), or it is someone else's (forget the note).
+ */
 type Verdict = 'arrived' | 'stale' | 'other';
+
+const copyField = (f: DropdownField): DropdownField => ({ ...f, options: f.options.map(opt => ({ ...opt })) });
 
 export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay {
   const ttlMs = o.ttlMs ?? 15000;
@@ -38,6 +43,9 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
   }
 
   function judge<V>(note: Note<V>, shown: V): Verdict {
+    // A value set and then set back is both our newest value and an earlier one: a read showing it may be from
+    // before either write, so the note stays until a read shows something else or the time runs out.
+    if (note.before.has(note.value)) return note.before.has(shown) ? 'stale' : 'other';
     if (shown === note.value) return 'arrived';
     return note.before.has(shown) ? 'stale' : 'other';
   }
@@ -65,7 +73,7 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
       const posNote = posNotes.get(card.id);
       if (posNote) {
         const verdict = judge(posNote, card.pos);
-        if (verdict === 'stale') next = { ...next, pos: posNote.value };
+        if (verdict === 'stale') { if (card.pos !== posNote.value) next = { ...next, pos: posNote.value }; }
         else posNotes.delete(card.id);
       }
       const byField = fieldNotes.get(card.id);
@@ -73,6 +81,7 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
         for (const [fieldId, note] of byField) {
           const shown = Object.hasOwn(card.fieldOptions, fieldId) ? card.fieldOptions[fieldId]! : null;
           if (judge(note, shown) !== 'stale') { byField.delete(fieldId); continue; }
+          if (shown === note.value) continue;   // set back to what it shows: nothing to lay over, the note stays
           // A computed key makes an own property even for a key such as `__proto__`, which an assignment would not.
           const { [fieldId]: _dropped, ...rest } = next.fieldOptions;
           next = { ...next, fieldOptions: note.value === null ? rest : { ...rest, [fieldId]: note.value } };
@@ -86,7 +95,7 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
     const have = new Set(snap.dropdownFields.map(f => f.id));
     const added: DropdownField[] = [];
     for (const [fieldId, n] of fieldCreates) {
-      if (have.has(fieldId)) fieldCreates.delete(fieldId); else added.push(n.field);
+      if (have.has(fieldId)) fieldCreates.delete(fieldId); else added.push(copyField(n.field));
     }
 
     if (!changed && added.length === 0 && stored === undefined) return snap;
@@ -112,7 +121,7 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
     },
     noteField(field) {
       forgetExpired();
-      fieldCreates.set(field.id, { field: { ...field, options: field.options.map(opt => ({ ...opt })) }, at: o.now() });
+      fieldCreates.set(field.id, { field: copyField(field), at: o.now() });
     },
     apply,
     pending() {

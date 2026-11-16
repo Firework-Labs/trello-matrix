@@ -91,13 +91,45 @@ describe('dropdown values', () => {
     expect(o.apply(fresh)).toBe(fresh); expect(o.pending()).toBe(0);
   });
 
-  test('after a newer note the value of an older write is not shown as ours', () => {
+  test("after a newer note, a value that is none of the noted ones is someone else's and wins", () => {
     const o = createOverlay({ now });
     o.noteFieldOption('c1', 'f1', 'oMed', 'oLow'); o.noteFieldOption('c1', 'f1', 'oHigh', 'oMed');
-    const other = snap({ c1: { f1: 'oLow', } });
-    expect(fieldOf(o.apply(other), 'c1', 'f1')).toBe('oHigh');
-    const third = snap({ c1: {} });   // a value that was never ours or before ours
-    expect(o.apply(third)).toBe(third);
+    const theirs = snap({ c1: { f1: 'oOther' } });
+    expect(o.apply(theirs)).toBe(theirs); expect(o.pending()).toBe(0);
+    const p = createOverlay({ now });
+    p.noteFieldOption('c1', 'f1', 'oMed', 'oLow'); p.noteFieldOption('c1', 'f1', 'oHigh', 'oMed');
+    const cleared = snap({ c1: {} });   // nothing shown is not one of the noted values either
+    expect(p.apply(cleared)).toBe(cleared); expect(p.pending()).toBe(0);
+  });
+
+  test('a value set and then set back stays overlaid while reads still show either of the two', () => {
+    t = 0;
+    const o = createOverlay({ now, ttlMs: 1000 });
+    o.noteFieldOption('c1', 'f1', 'oB', 'oA'); o.noteFieldOption('c1', 'f1', 'oA', 'oB');   // A to B, then B back to A
+    for (const shown of ['oA', 'oB', 'oA']) {
+      expect(fieldOf(o.apply(snap({ c1: { f1: shown } })), 'c1', 'f1')).toBe('oA');
+      expect(o.pending()).toBe(1);
+    }
+    const theirs = snap({ c1: { f1: 'oC' } });   // a third value is someone else's
+    expect(o.apply(theirs)).toBe(theirs); expect(o.pending()).toBe(0);
+  });
+
+  test('a value set and then set back is forgotten after the time limit', () => {
+    t = 0;
+    const o = createOverlay({ now, ttlMs: 1000 });
+    o.noteFieldOption('c1', 'f1', 'oB', 'oA'); o.noteFieldOption('c1', 'f1', 'oA', 'oB');
+    advance(1001);
+    const s = snap({ c1: { f1: 'oB' } });
+    expect(o.apply(s)).toBe(s); expect(o.pending()).toBe(0);
+  });
+
+  test('a cleared value that was set back to nothing stays overlaid the same way', () => {
+    const o = createOverlay({ now });
+    o.noteFieldOption('c1', 'f1', 'oA', null); o.noteFieldOption('c1', 'f1', null, 'oA');   // nothing to A, then A cleared
+    expect('f1' in o.apply(snap({ c1: {} })).cards[0]!.fieldOptions).toBe(false);
+    expect(o.pending()).toBe(1);
+    expect('f1' in o.apply(snap({ c1: { f1: 'oA' } })).cards[0]!.fieldOptions).toBe(false);
+    expect(o.pending()).toBe(1);
   });
 
   test('notes on different fields of one card are independent', () => {
@@ -176,6 +208,22 @@ describe('list positions', () => {
     expect(o.apply(snap({ c1: {} }, [], { c1: 200 })).cards[0]!.pos).toBe(300);
   });
 
+  test('a position set and then set back stays overlaid while reads show either, until a third value', () => {
+    t = 0;
+    const o = createOverlay({ now, ttlMs: 1000 });
+    o.noteCardPos('c1', 200, 100); o.noteCardPos('c1', 100, 200);   // 100 to 200, then back to 100
+    for (const shown of [100, 200, 100]) {
+      expect(o.apply(snap({ c1: {} }, [], { c1: shown })).cards[0]!.pos).toBe(100);
+      expect(o.pending()).toBe(1);
+    }
+    const theirs = snap({ c1: {} }, [], { c1: 300 });
+    expect(o.apply(theirs)).toBe(theirs); expect(o.pending()).toBe(0);
+    o.noteCardPos('c1', 200, 100); o.noteCardPos('c1', 100, 200);
+    advance(1001);
+    const late = snap({ c1: {} }, [], { c1: 200 });
+    expect(o.apply(late)).toBe(late); expect(o.pending()).toBe(0);
+  });
+
   test('expire, and are forgotten for a card that is gone', () => {
     t = 0;
     const o = createOverlay({ now, ttlMs: 1000 }); o.noteCardPos('c1', 500, 100); o.noteCardPos('gone', 5, 4);
@@ -225,6 +273,16 @@ describe('created fields', () => {
     advance(1001);
     const s = snap({});
     expect(o.apply(s)).toBe(s); expect(o.pending()).toBe(0);
+  });
+
+  test('what apply returns is a copy: changing it does not change the note', () => {
+    const o = createOverlay({ now });
+    o.noteField(field);
+    const first = o.apply(snap({})).dropdownFields[0]!;
+    first.name = 'Mutated'; first.options[0]!.text = 'Mutated'; first.options.push({ id: 'z', text: 'Z', colour: 'none' });
+    const second = o.apply(snap({})).dropdownFields[0]!;
+    expect(second).toEqual(field);
+    expect(second).not.toBe(first); expect(second.options).not.toBe(first.options);
   });
 
   test('the note keeps its own copy of the field', () => {

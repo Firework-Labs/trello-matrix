@@ -32,10 +32,18 @@ function plainObject<V>(entries: Iterable<readonly [string, V]>): Record<string,
   return Object.fromEntries([...entries].filter(([k]) => k !== '__proto__'));
 }
 
-const isHttps = (u: unknown): u is string => {
-  if (!isString(u)) return false;
-  try { return new URL(u).protocol === 'https:'; } catch { return false; }
-};
+/**
+ * The canonical form of an https address, or null. The returned text is the parsed address, never the input, so
+ * what is checked is what is used: case, stray spaces and newlines, and forms such as `https:/x/y.png` are
+ * normalised, and an address that carries a user name or password is refused.
+ */
+function httpsHref(u: unknown): string | null {
+  if (!isString(u)) return null;
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' ? parsed.href : null;
+  } catch { return null; }
+}
 
 export function coverUrlOf(rawCover: unknown, maxWidth = 600): string | null {
   if (!isRecord(rawCover)) return null;
@@ -43,7 +51,8 @@ export function coverUrlOf(rawCover: unknown, maxWidth = 600): string | null {
   for (const list of [rawCover.previews, rawCover.scaled]) {
     if (!Array.isArray(list)) continue;
     for (const p of list) {
-      if (isRecord(p) && isHttps(p.url) && isNumber(p.width)) sized.push({ url: p.url, width: p.width });
+      const url = isRecord(p) ? httpsHref(p.url) : null;
+      if (isRecord(p) && url !== null && isNumber(p.width)) sized.push({ url, width: p.width });
     }
   }
   const fits = sized.filter(p => p.width <= maxWidth);
@@ -52,7 +61,7 @@ export function coverUrlOf(rawCover: unknown, maxWidth = 600): string | null {
     const better = fits.length > 0 ? (a: number, b: number) => a > b : (a: number, b: number) => a < b;
     return pool.reduce((best, p) => (better(p.width, best.width) ? p : best)).url;
   }
-  return isHttps(rawCover.url) ? rawCover.url : null;
+  return httpsHref(rawCover.url);
 }
 
 export function coverUrls(rawCards: unknown): Record<string, string> {
