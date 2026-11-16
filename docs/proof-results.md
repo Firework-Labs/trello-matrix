@@ -27,7 +27,8 @@ Other things Mike saw:
 
 ## What the results decide so far
 
-- `SYNC_MODE`: `render` works (P2). Polling stays as the fallback.
+- Live updates: Trello's own change notice works (P2). There is no polling
+  fallback; see the P8 point below.
 - REST base URL: either host works; use `https://api.trello.com`.
 - Return path after opening a card: the matrix is closed by Trello (P4).
 - Reordering: numeric list positions work; about 9 moves a second without
