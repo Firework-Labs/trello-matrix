@@ -57,8 +57,15 @@ function idsOf(list: unknown): string[] {
 interface ReadResult {
   shown: BoardSnapshot;                     // the snapshot with our own recent writes laid over it
   cardData: Record<string, unknown>;        // each card's stored value, by card id, as read
-  overlapped: boolean;                      // one of our writes finished while this read was under way
+  unreadable: Set<string>;                  // cards whose stored value could not be read (shown as having none)
+  startedAt: number;                        // the write counter when the read began
 }
+
+/** Largest entry the parameter list can gain: a 24-character field id and three 24-character option ids. */
+const LARGEST_PARAM_ENTRY: StoredParam = { f: 'f'.repeat(24), o: ['a', 'b', 'c'].map(c => c.repeat(24)) };
+
+/** How many times `load` reads when its read keeps being overtaken by our own writes. */
+const LOAD_ATTEMPTS = 3;
 
 export function createTrelloStore(o: {
   t: TrelloIframe; rest: Rest; auth: TrelloAuth;
@@ -116,12 +123,16 @@ export function createTrelloStore(o: {
     } catch { return false; }
   }
 
-  async function gather(): Promise<RawBoardData> {
+  async function gather(): Promise<{ data: RawBoardData; unreadable: Set<string> }> {
+    const unreadable = new Set<string>();
     try {
       const cards = call(() => t.cards('id', 'name', 'idList', 'pos', 'labels', 'members', 'cover', 'customFieldItems'));
       // A card whose own data cannot be read counts as having none; anything else failing fails the read.
       const cardEntries = cards.then(list => Promise.all(idsOf(list).map(id =>
-        call(() => t.get(id, 'shared', KEY_CARD)).then(value => [id, value] as const, () => [id, undefined] as const))));
+        call(() => t.get(id, 'shared', KEY_CARD)).then(
+          value => [id, value] as const,
+          () => { unreadable.add(id); return [id, undefined] as const; },
+        ))));
       const [cardList, lists, board, params, reorder, entries] = await Promise.all([
         cards,
         call(() => t.lists('id', 'name')),
@@ -131,7 +142,8 @@ export function createTrelloStore(o: {
         cardEntries,
       ]);
       // fromEntries makes own properties even for an id like `__proto__`.
-      return { cards: cardList, lists, board, cardData: Object.fromEntries(entries), params, reorder, canEdit: canEdit() };
+      const data = { cards: cardList, lists, board, cardData: Object.fromEntries(entries), params, reorder, canEdit: canEdit() };
+      return { data, unreadable };
     } catch {
       throw new StoreError('network', 'Could not read from Trello.');
     }
@@ -142,21 +154,26 @@ export function createTrelloStore(o: {
   function read(): Promise<ReadResult> {
     const run = async (): Promise<ReadResult> => {
       const startedAt = epoch;
-      const data = await gather();
+      const { data, unreadable } = await gather();
       const snapshot = toSnapshot(data);
       const params = decodeParams(data.params);
       const shown = overlay.apply(snapshot, params);
-      const overlapped = epoch !== startedAt;
-      if (!overlapped) {
+      if (epoch === startedAt) {
         base = snapshot; storedParams = params; covers = coverUrls(data.cards);
         if (isRecord(data.board) && isString(data.board.id) && data.board.id !== '') boardId = data.board.id;
       }
-      return { shown, cardData: data.cardData, overlapped };
+      return { shown, cardData: data.cardData, unreadable, startedAt };
     };
     const next = readChain.then(run);
     readChain = next.catch(() => undefined);
     return next;
   }
+
+  /**
+   * Whether a read can be shown as the board now: none of our writes finished since it began, and none is under way
+   * (one under way may already have been answered for the card the read looked at before the write took effect).
+   */
+  const isCurrent = (r: ReadResult) => r.startedAt === epoch && busy === 0;
 
   /** The latest snapshot we know, with our own writes since laid over it. Reads once if there is none yet. */
   async function latest(): Promise<BoardSnapshot> {
@@ -178,6 +195,11 @@ export function createTrelloStore(o: {
   async function setKey(scope: string, visibility: 'shared' | 'private', key: string, value: unknown): Promise<void> {
     assertFits(value);
     await step(async () => { try { await t.set(scope, visibility, key, value); } catch (e) { throw saveError(e); } });
+  }
+  /** Stores the saved view. It cannot change a snapshot, so it is not counted as a write that reads must wait for. */
+  async function setView(value: unknown): Promise<void> {
+    assertFits(value);
+    try { await t.set('board', 'private', KEY_VIEW, value); } catch (e) { throw saveError(e); }
   }
   async function removeKey(scope: string, visibility: 'shared' | 'private', key: string): Promise<void> {
     await step(async () => { try { await t.remove(scope, visibility, key); } catch (e) { throw saveError(e); } });
@@ -211,10 +233,14 @@ export function createTrelloStore(o: {
   }
 
   const reorderer = createReorderer({
-    fresh: async () => { const r = await read(); return { snapshot: r.shown, cardData: r.cardData }; },
+    fresh: async () => { const r = await read(); return { snapshot: r.shown, cardData: r.cardData, unreadable: r.unreadable }; },
     getMarker: async () => decodeReorder(await getKey('board', 'shared', KEY_REORDER)),
     putMarker: (marker: StoredReorder) => setKey('board', 'shared', KEY_REORDER, marker),
-    dropMarker: () => removeKey('board', 'shared', KEY_REORDER),
+    // Only the marker this undo started with: the other person may have started a reorder since.
+    dropMarker: async gen => {
+      const current = decodeReorder(await getKey('board', 'shared', KEY_REORDER));
+      if (current !== null && current.gen === gen) await removeKey('board', 'shared', KEY_REORDER);
+    },
     updateCard,
     moveCard: (cardId, pos, was) => step(async () => {
       await call(() => rest.setCardPos(cardId, pos)).catch(e => { throw restError(e); });
@@ -245,7 +271,7 @@ export function createTrelloStore(o: {
         await whenIdle();                                   // a read made during a write would only be thrown away
         if (subscribers.size === 0) return;
         const result = await read();
-        if (!result.overlapped) { deliver(result.shown); return; }
+        if (isCurrent(result)) { deliver(result.shown); return; }
       }
     } catch { /* dropped */ }
   }
@@ -274,7 +300,11 @@ export function createTrelloStore(o: {
     },
 
     async load() {
-      return structuredClone((await read()).shown);
+      // A read that one of our writes overtook is read again, a few times at most.
+      for (let attempt = 1; ; attempt++) {
+        const result = await read();
+        if (isCurrent(result) || attempt >= LOAD_ATTEMPTS) return structuredClone(result.shown);
+      }
     },
 
     subscribe(onChange) {
@@ -324,6 +354,8 @@ export function createTrelloStore(o: {
       return own(() => locked('params', async () => {
         const { name, levels } = validateNewParameter(await latest(), input);
         const id = currentBoardId();
+        // The list must still have room for the entry, or the field would be made and then could not be added.
+        assertFits([...decodeParams(await getKey('board', 'shared', KEY_PARAMS)), LARGEST_PARAM_ENTRY]);
         // Sent once, never retried here: a second field would be left on the shared board.
         const field = await step(async () => {
           const made = await call(() => rest.createDropdownField(id, name, levels)).catch(e => { throw restError(e); });
@@ -369,6 +401,6 @@ export function createTrelloStore(o: {
     },
 
     async loadView() { return decodeView(await getKey('board', 'private', KEY_VIEW)); },
-    saveView: view => own(() => setKey('board', 'private', KEY_VIEW, view)),
+    saveView: view => setView(view),
   };
 }

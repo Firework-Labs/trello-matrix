@@ -10,10 +10,11 @@ export const KEEP = Symbol('keep');
 
 export interface ReorderIo {
   /** A fresh read of the board with every card's stored value (raw, by card id). */
-  fresh(): Promise<{ snapshot: BoardSnapshot; cardData: Record<string, unknown> }>;
+  fresh(): Promise<{ snapshot: BoardSnapshot; cardData: Record<string, unknown>; unreadable: Set<string> }>;
   getMarker(): Promise<StoredReorder | null>;
   putMarker(marker: StoredReorder): Promise<void>;
-  dropMarker(): Promise<void>;
+  /** Removes the marker, but only if it is still the one with this id. */
+  dropMarker(gen: string): Promise<void>;
   /** Reads the card's stored value now and writes what `change` returns (or nothing for KEEP; null removes it). */
   updateCard(cardId: string, change: (stored: StoredCard) => StoredCard | null | typeof KEEP): Promise<void>;
   /** Sets the card's list position in Trello and notes it so a read shows it before Trello's own data does. */
@@ -26,10 +27,13 @@ export interface Reorderer {
   undo(onProgress: (p: Progress) => void): Promise<void>;
 }
 
+/** A card's stored value holds its saved positions and the position to undo to, so acting on a guess about it is never safe. */
+const UNREADABLE = 'Some cards could not be read. Nothing was changed. Try again.';
+
 export function createReorderer(io: ReorderIo): Reorderer {
   return {
     async reorder(orders, onProgress) {
-      const { snapshot } = await io.fresh();
+      const { snapshot, unreadable } = await io.fresh();
       const cards = new Map(snapshot.cards.map(c => [c.id, c] as const));
       const lists = new Set(snapshot.lists.map(l => l.id));
       const wanted = new Map<string, string[]>();                 // a list named twice is ordered once, by its last order
@@ -43,6 +47,8 @@ export function createReorderer(io: ReorderIo): Reorderer {
         plan.push(...positionsFor(ids));
       }
       if (plan.length === 0) return;
+      // A card read as having no data would get a stored value built from nothing, wiping the positions it has.
+      if (plan.some(({ cardId }) => unreadable.has(cardId))) throw new StoreError('network', UNREADABLE);
 
       // An unfinished reorder is being retried: keep its id, so the positions it already saved are kept.
       const marker = await io.getMarker();
@@ -62,7 +68,9 @@ export function createReorderer(io: ReorderIo): Reorderer {
     async undo(onProgress) {
       const marker = await io.getMarker();
       if (marker === null) throw new StoreError('invalid', 'There is no reorder to undo.');
-      const { snapshot, cardData } = await io.fresh();
+      const { snapshot, cardData, unreadable } = await io.fresh();
+      // Which cards belong to the reorder is known only from their stored values, so one that cannot be read may be one of them.
+      if (unreadable.size > 0) throw new StoreError('network', UNREADABLE);
       const todo: { cardId: string; was: number; prev: number }[] = [];
       for (const card of snapshot.cards) {
         if (!Object.hasOwn(cardData, card.id)) continue;
@@ -76,7 +84,7 @@ export function createReorderer(io: ReorderIo): Reorderer {
         await io.updateCard(cardId, stored => (stored.gen === marker.gen ? { p: stored.p } : KEEP));
         onProgress({ done: ++done, total: todo.length });
       }
-      await io.dropMarker();
+      await io.dropMarker(marker.gen);
     },
   };
 }

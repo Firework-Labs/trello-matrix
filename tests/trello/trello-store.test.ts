@@ -28,6 +28,7 @@ interface World {
   cardsImpl: (() => Promise<unknown>) | null;     // replaces the default answer of t.cards
   failGet: (scope: string, vis: string, key: string) => Error | null;
   failSet: (scope: string, vis: string, key: string) => Error | null;
+  setGate: Promise<void> | null;                  // t.set waits for this before it takes effect
   ops: Op[];                                  // t.set and t.remove that went through
   log: string[];                              // every write from the store, t and REST, in order
   renderFns: (() => unknown)[];
@@ -65,7 +66,7 @@ function newWorld(): World {
       ],
     },
     permissions: { board: 'write' },
-    cardsImpl: null, failGet: () => null, failSet: () => null,
+    cardsImpl: null, failGet: () => null, failSet: () => null, setGate: null,
     ops: [], log: [], renderFns: [], shown: [], cardsCalls: 0, clock: 1_000_000, newIds: 0,
   };
   put(w, 'board', 'shared', KEY_PARAMS, [{ f: 'f1', o: ['oLow', 'oMed', 'oHigh'] }]);
@@ -85,6 +86,7 @@ function makeT(w: World): TrelloIframe {
     async set(scope, vis, key, value) {
       const err = w.failSet(scope, vis, key);
       if (err) throw err;
+      if (w.setGate) await w.setGate;
       w.ops.push({ op: 'set', scope, vis, key, value: structuredClone(value) });
       w.log.push(`set ${scope} ${key}`);
       put(w, scope, vis, key, value);
@@ -229,6 +231,43 @@ describe('load', () => {
     expect(second.parameters[0]!.levels).toEqual(['Low', 'Medium', 'High']);
   });
 
+  test('a load whose read began before an own write finished reads again and shows the write', async () => {
+    const { w, st } = setup();
+    const param = paramNamed(await st.load(), 'f1');
+    const reads = w.cardsCalls;
+    const pending: ((v: unknown) => void)[] = [];
+    w.cardsImpl = () => new Promise(resolve => { pending.push(resolve); });
+    const loading = st.load();
+    await settle();
+    expect(pending).toHaveLength(1);
+    await st.setLevel('c2', param, 2);
+    pending[0]!(structuredClone(w.cards));                 // the answer that lacks the write
+    await settle();
+    expect(pending).toHaveLength(2);
+    pending[1]!(structuredClone(w.cards));
+    expect(cardIn(await loading, 'c2').fieldOptions).toEqual({ f1: 'oHigh' });
+    expect(w.cardsCalls).toBe(reads + 2);
+  });
+
+  test('a load gives up re-reading after three reads when writes keep coming, and returns the last', async () => {
+    const { w, st } = setup();
+    const param = paramNamed(await st.load(), 'f1');
+    const reads = w.cardsCalls;
+    const pending: ((v: unknown) => void)[] = [];
+    w.cardsImpl = () => new Promise(resolve => { pending.push(resolve); });
+    const loading = st.load();
+    for (let i = 0; i < 3; i++) {
+      await settle();
+      expect(pending).toHaveLength(i + 1);
+      await st.setLevel('c2', param, i % 3);
+      pending[i]!(structuredClone(w.cards));
+    }
+    const snap = await loading;
+    expect(snap.cards).toHaveLength(4);
+    expect(cardIn(snap, 'c2').fieldOptions).toEqual({ f1: 'oHigh' });   // the third write, laid over the third read
+    expect(w.cardsCalls).toBe(reads + 3);
+  });
+
   test('a card whose stored data cannot be read is loaded with no placement; the others still load', async () => {
     const { w, st } = setup();
     put(w, 'c2', 'shared', KEY_CARD, { p: { f1: 0.3 } });
@@ -354,6 +393,16 @@ describe('savePositions', () => {
     expect(cardValue(w, 'c2')).toEqual({ p: { f1: 0.1, f2: 0.2 } });
   });
 
+  test('a save and a running reorder touching the same card at the same time both land on its stored value', async () => {
+    const { w, st } = setup();
+    await st.load();
+    const reorder = st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
+    const save = st.savePositions('c1', { f2: 0.4 });
+    await Promise.all([reorder, save]);
+    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9, f2: 0.4 }, prev: 100, gen: 'gen-1' });
+    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
+  });
+
   test('a failed read of the stored value rejects with a network error and writes nothing', async () => {
     const { w, rest, st } = setup();
     await st.load();
@@ -434,6 +483,9 @@ describe('storage failures', () => {
     await st.load();
     w.failSet = () => new Error('Request failed');
     expect(await error(st.savePositions('c1', { f1: null }))).toMatchObject({ kind: 'network', message: 'Could not save to Trello.' });
+    expect(w.log).toEqual([]);
+    expect(w.ops).toEqual([]);
+    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 } });
   });
 
   test('a value that would be too long is refused before it is sent', async () => {
@@ -509,22 +561,44 @@ describe('createParameter', () => {
     expect(rest.calls.filter(c => c.method === 'createDropdownField')).toHaveLength(1);
   });
 
-  test('a failed read of the stored list, or a list that would be too long, gives the same message', async () => {
+  test('a stored list that cannot be read stops the create before any request', async () => {
+    const { w, rest, st } = setup();
+    await st.load();
+    w.failGet = (_s, _v, key) => (key === KEY_PARAMS ? new Error('boom') : null);
+    expect(await error(st.createParameter(input()))).toMatchObject({ kind: 'network', message: 'Could not read from Trello.' });
+    noWrites(w, rest);
+  });
+
+  test('a list that cannot be read, or has filled up, after the field was created gives the "created but not added" message', async () => {
+    const added = { message: expect.stringContaining('created in Trello but could not be added') };
     {
       const { w, rest, st } = setup();
       await st.load();
-      w.failGet = (_s, _v, key) => (key === KEY_PARAMS ? new Error('boom') : null);
-      expect(await error(st.createParameter(input()))).toMatchObject({ message: expect.stringContaining('created in Trello but could not be added') });
-      expect(rest.calls).toHaveLength(1);
-    }
-    {
-      const { w, rest, st } = setup();
-      await st.load();
-      put(w, 'board', 'shared', KEY_PARAMS, Array.from({ length: 150 }, (_, i) => ({ f: `field-${i}`, o: ['aaaaaaaaaaaa', 'bbbbbbbbbbbb', 'cccccccccccc'] })));
-      expect(await error(st.createParameter(input()))).toMatchObject({ message: expect.stringContaining('created in Trello but could not be added') });
+      let reads = 0;
+      w.failGet = (_s, _v, key) => (key === KEY_PARAMS && ++reads === 2 ? new Error('boom') : null);
+      expect(await error(st.createParameter(input()))).toMatchObject(added);
       expect(rest.calls).toHaveLength(1);
       expect(w.ops).toEqual([]);
     }
+    {
+      const { w, rest, st } = setup();
+      await st.load();
+      rest.onCall = () => put(w, 'board', 'shared', KEY_PARAMS, Array.from({ length: 150 }, (_, i) => ({ f: `field-${i}`, o: ['aaaaaaaaaaaa', 'bbbbbbbbbbbb', 'cccccccccccc'] })));
+      expect(await error(st.createParameter(input()))).toMatchObject(added);
+      expect(rest.calls).toHaveLength(1);
+      expect(w.ops).toEqual([]);
+    }
+  });
+
+  test('a stored list too full for one more parameter is refused before the field is created', async () => {
+    const { w, rest, st } = setup();
+    await st.load();
+    const list: { f: string; o: string[] }[] = [];
+    while (JSON.stringify(list).length <= 3996) list.push({ f: `field-${list.length}`, o: ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'] });
+    expect(JSON.stringify(list).length).toBeLessThanOrEqual(4096);      // the list itself still fits
+    put(w, 'board', 'shared', KEY_PARAMS, list);
+    expect(await error(st.createParameter(input()))).toMatchObject({ kind: 'limit', message: "Trello's 4,096-character limit for stored data was reached." });
+    noWrites(w, rest);
   });
 
   test('a request Trello refused rejects with its error and stores nothing', async () => {
@@ -578,6 +652,10 @@ describe('linkParameter', () => {
     await st.load();
     w.failSet = () => new Error('Request failed');
     expect(await error(st.linkParameter('f2', 'last'))).toMatchObject({ kind: 'network', message: 'Could not save to Trello.' });
+    expect(w.log).toEqual([]);
+    expect(w.ops).toEqual([]);
+    expect(storedParams(w)).toEqual([{ f: 'f1', o: ['oLow', 'oMed', 'oHigh'] }]);
+    expect((await st.load()).parameters.map(p => p.id)).toEqual(['f1']);
   });
 });
 
@@ -731,6 +809,23 @@ describe('reorderLists', () => {
     expect(marker(w)).toEqual({ gen: 'gen-1', complete: false });
   });
 
+  test('with the stored data of a card being ordered unreadable it rejects and writes nothing; other cards do not matter', async () => {
+    const { w, rest, st } = setup();
+    put(w, 'c2', 'shared', KEY_CARD, { p: { f1: 0.3 } });
+    await st.load();
+    w.failGet = (scope, _v, key) => (scope === 'c2' && key === KEY_CARD ? new Error('boom') : null);
+    const progress: Progress[] = [];
+    expect(await error(st.reorderLists(l1('c3', 'c1', 'c2'), p => progress.push(p))))
+      .toMatchObject({ kind: 'network', message: 'Some cards could not be read. Nothing was changed. Try again.' });
+    noWrites(w, rest);
+    expect(progress).toEqual([]);
+    expect(w.newIds).toBe(0);
+    expect(cardValue(w, 'c2')).toEqual({ p: { f1: 0.3 } });
+
+    await st.reorderLists(l1('c3', 'c1'), () => {});          // c2 is not being ordered: it is not in the way
+    expect(rest.calls.map(c => c.args)).toEqual([['c3', 16384], ['c1', 32768]]);
+  });
+
   test('a new reorder after a completed one gets a new id and replaces the marker', async () => {
     const { w, st } = setup();
     await st.reorderLists(l1('c1', 'c2'), () => {});
@@ -782,6 +877,38 @@ describe('undoReorder', () => {
     expect(progress).toEqual([{ done: 1, total: 2 }, { done: 2, total: 2 }]);
     expect(marker(w)).toBeUndefined();
     expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 } });
+  });
+
+  test('with a reordered card\'s stored data unreadable it rejects before moving anything, keeps the marker, and a later undo restores every card', async () => {
+    const { w, rest, st } = setup();
+    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
+    rest.calls.length = 0;
+    w.ops.length = 0;
+    w.failGet = (scope, _v, key) => (scope === 'c2' && key === KEY_CARD ? new Error('boom') : null);
+    const progress: Progress[] = [];
+    expect(await error(st.undoReorder(p => progress.push(p))))
+      .toMatchObject({ kind: 'network', message: 'Some cards could not be read. Nothing was changed. Try again.' });
+    expect(rest.calls).toEqual([]);
+    expect(w.ops).toEqual([]);
+    expect(progress).toEqual([]);
+    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
+    expect(cardValue(w, 'c3')).toEqual({ prev: 300, gen: 'gen-1' });
+
+    w.failGet = () => null;
+    await st.undoReorder(() => {});
+    expect(['c1', 'c2', 'c3'].map(id => raw(w, id).pos)).toEqual([100, 200, 300]);
+    expect(marker(w)).toBeUndefined();
+  });
+
+  test('the marker is removed only if it is still the one this undo started with', async () => {
+    const { w, rest, st } = setup();
+    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
+    rest.calls.length = 0;
+    rest.onCall = n => { if (n === 1) put(w, 'board', 'shared', KEY_REORDER, { gen: 'newer', complete: false }); };   // the other person starts a reorder
+    await st.undoReorder(() => {});
+    expect(marker(w)).toEqual({ gen: 'newer', complete: false });
+    expect(w.ops.filter(op => op.op === 'remove' && op.key === KEY_REORDER)).toEqual([]);
+    expect(['c1', 'c2', 'c3'].map(id => raw(w, id).pos)).toEqual([100, 200, 300]);
   });
 
   test('a card whose stored value another reorder replaced meanwhile keeps that value', async () => {
@@ -936,6 +1063,85 @@ describe('subscribe', () => {
     await settle();
     expect(got).toHaveLength(1);
     expect(cardIn(got[0]!, 'c2').fieldOptions).toEqual({ f1: 'oHigh' });
+  });
+
+  test('a reload whose read missed a setLevel still under way is not delivered; one snapshot shows the write once it ends', async () => {
+    const { w, rest, st } = setup();
+    const param = paramNamed(await st.load(), 'f1');
+    const pending: ((v: unknown) => void)[] = [];
+    w.cardsImpl = () => new Promise(resolve => { pending.push(resolve); });
+    const got: BoardSnapshot[] = [];
+    st.subscribe(s => got.push(s));
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(pending).toHaveLength(1);                       // the reload's read is waiting for t.cards
+
+    let open!: () => void;
+    rest.gate = new Promise<void>(resolve => { open = resolve; });
+    const write = st.setLevel('c2', param, 2);             // starts after the read began, and is still not answered
+    await settle();
+    expect(rest.calls).toHaveLength(1);
+    pending[0]!(structuredClone(w.cards));                 // the read finishes without the write
+    await settle();
+    expect(got).toHaveLength(0);
+
+    open();
+    await write;
+    await settle();
+    expect(got).toHaveLength(0);
+    expect(pending).toHaveLength(2);                       // read again once the write ended
+    pending[1]!(structuredClone(w.cards));
+    await settle();
+    expect(got).toHaveLength(1);
+    expect(cardIn(got[0]!, 'c2').fieldOptions).toEqual({ f1: 'oHigh' });
+  });
+
+  test('a reload whose read missed a savePositions still under way is not delivered; one snapshot shows the write once it ends', async () => {
+    const { w, st } = setup();
+    await st.load();
+    const pending: ((v: unknown) => void)[] = [];
+    w.cardsImpl = () => new Promise(resolve => { pending.push(resolve); });
+    const got: BoardSnapshot[] = [];
+    st.subscribe(s => got.push(s));
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(pending).toHaveLength(1);
+
+    let open!: () => void;
+    w.setGate = new Promise<void>(resolve => { open = resolve; });
+    const write = st.savePositions('c2', { f1: 0.3 });
+    await settle();
+    expect(w.ops).toEqual([]);                             // t.set has been called but has not taken effect
+    pending[0]!(structuredClone(w.cards));
+    await settle();
+    expect(got).toHaveLength(0);
+
+    open();
+    await write;
+    await settle();
+    expect(got).toHaveLength(0);
+    expect(pending).toHaveLength(2);
+    pending[1]!(structuredClone(w.cards));
+    await settle();
+    expect(got).toHaveLength(1);
+    expect(got[0]!.placements).toEqual({ c1: { positions: { f1: 0.9 } }, c2: { positions: { f1: 0.3 } } });
+  });
+
+  test('saving the view does not hold back or throw away a reload', async () => {
+    const { w, st } = setup();
+    const pending: ((v: unknown) => void)[] = [];
+    w.cardsImpl = () => new Promise(resolve => { pending.push(resolve); });
+    const got: BoardSnapshot[] = [];
+    st.subscribe(s => got.push(s));
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(pending).toHaveLength(1);
+    await st.saveView({ across: null, up: null, listIds: [], colourBy: { kind: 'label' }, showImages: true, zoom: 1, panX: 0, panY: 0 });
+    expect(w.ops).toHaveLength(1);
+    pending[0]!(structuredClone(w.cards));
+    await settle();
+    expect(got).toHaveLength(1);
+    expect(pending).toHaveLength(1);                       // no second read
   });
 
   test('while a write is in progress a reload waits for it instead of reading', async () => {
@@ -1130,6 +1336,7 @@ describe('connecting and opening cards', () => {
     const e = await error(st.connect());
     expect(e).toMatchObject({ kind: 'auth', message: 'Trello access was not given.' });
     expect(e.message).not.toContain('secret');
+    expect(auth.calls).toEqual(['authorize']);
   });
 
   test('openCard shows the card', async () => {
