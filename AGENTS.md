@@ -67,3 +67,25 @@ prioritising a backlog. Static site, no server, all data in Trello.
 - Dialogs and the drawer make the rest of the page `inert` through
   `src/view/modal.ts`. Use it for any new modal.
 
+- Trello refuses to rename or delete custom fields and their options for
+  OAuth 2.0 tokens (HTTP 403 "missing scopes"), and does not return the
+  Power-Up's hidden card data through REST. `docs/proof-results.md` records
+  what a real board answered; trust it over Trello's reference.
+- The Power-Up's own data lags a REST write by about a quarter of a second.
+  `src/trello/overlay.ts` covers that; any new REST write must note itself
+  there with the value from before the write.
+- Every read and storage call in the Trello store has a 20-second limit, and a
+  read is delivered only if no own write finished since it began and none is
+  under way. Keep both when changing `src/trello/trello-store.ts`.
+- A sign-in that lapses shows the reconnect bar (`src/view/reconnect-bar.ts`);
+  `app.ts` wraps every store call to catch `auth` errors in one place.
+- The checks page (`proof.html`) is built only when `VITE_PROOF=1`, and writes
+  to whichever board it is opened on. It must be off before the real board.
+
+## Publishing
+
+- GitHub Pages builds from `main` on every push. To publish: fast-forward
+  `main` to the working branch and push both. Repository variables:
+  `TRELLO_CLIENT_ID` (the OAuth 2.0 client ID) and `PROOF` (`1` or `0`).
+- Do not publish while Mike is in the middle of a check or acceptance run
+  unless he is blocked on the fix.
