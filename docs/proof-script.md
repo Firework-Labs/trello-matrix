@@ -23,7 +23,15 @@ You do the whole thing twice: first in **Chrome**, then in **Safari**. Press
 3. Both tick **This is a test board**. Until you tick it, the checks that change
    the board stay switched off.
 
+If you have no second person, you can do both parts yourself. Open the board in
+a second browser window, press **Matrix checks** there and tick **This is a
+test board** there too. Two people is the better test.
+
 ## Round: do these in order
+
+The page lists the checks in the same order as these steps, from top to bottom
+(P1, P3, P5, P6, P7, P8, P2, P4), with a number in front of each. Those numbers
+count the checks, not the steps below. Each row also says what to do.
 
 1. **Person A: press Run on P1.** Wait for the result. It should say `pass`.
    - If it says `fail`, stop. Copy the results (step 13) and send them back
@@ -58,9 +66,13 @@ then run it again.
    the detail line says how long the 30 saves took.
 8. **Person A: press Run on P2** and leave the page open. It waits up to 90
    seconds. Do not reload it.
-9. **Person B: press Write ping** (next to P2) within those 90 seconds, in
-   B's own window. Wait for A's row to change. It tells you whether the page
-   noticed without a reload, and how long it took.
+9. **Person B: press Write ping** (the button next to P2 that says "Write ping
+   (press in the other window)") within those 90 seconds, in B's own window.
+   Wait for A's row to change. It tells you whether the page noticed without a
+   reload, and how long it took.
+   - If the row says `fail` and begins "No ping arrived", nobody pressed the
+     button in time. That is not a real result: press Run on P2 again and
+     press Write ping in the other window.
 10. **Person A: press Run on P4.** A card opens on top of the matrix page.
 11. **Person A: close the card** and look at the page again. A moment later, the
     P4 row says either `matrix stayed open` or `matrix was closed`. If it says

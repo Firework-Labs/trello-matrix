@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { checks, p3AfterReload, p4Closed, p4Survived, writePing } from '../../src/proof/checks';
+import { RUN_ORDER, checks, p3AfterReload, p4Closed, p4Survived, writePing } from '../../src/proof/checks';
 import type { CheckDeps, RestHost } from '../../src/proof/checks';
 import type { TrelloAuth } from '../../src/trello/auth';
 
@@ -132,6 +132,29 @@ const byId = (id: string) => {
 
 test('there are eight checks, P1 to P8, in order', () => {
   expect(checks.map(c => c.id)).toEqual(['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8']);
+});
+
+test('the run order is the script order and holds every check id exactly once', () => {
+  expect([...RUN_ORDER]).toEqual(['P1', 'P3', 'P5', 'P6', 'P7', 'P8', 'P2', 'P4']);
+  expect([...RUN_ORDER].sort()).toEqual(checks.map(c => c.id).sort());
+  expect(new Set(RUN_ORDER).size).toBe(RUN_ORDER.length);
+});
+
+test('every check has a one-line instruction, and the texts are the ones the script promises', () => {
+  for (const c of checks) {
+    expect(c.instruction.trim()).not.toBe('');
+    expect(c.instruction).not.toMatch(/\n/);
+  }
+  expect(Object.fromEntries(checks.map(c => [c.id, c.instruction]))).toEqual({
+    P1: 'Press Run.',
+    P3: 'Press Run and allow access in the window that opens. When the row has a result, reload this page once.',
+    P5: 'Press Run. Needs a card with a cover image.',
+    P6: 'Press Run. It moves one card and puts it back.',
+    P7: 'Press Run. It adds a temporary field and removes it.',
+    P8: 'Press Run. It takes a few seconds.',
+    P2: 'Needs a second browser window open on this board with this page (another person, or you in another window). Press Run here, then press Write ping in the other window within 90 seconds.',
+    P4: 'Press Run, then close the card that opens.',
+  });
 });
 
 test('P1 passes when a value set on another card id reads back', async () => {
@@ -620,7 +643,10 @@ describe('P2', () => {
     const d = withClock();
     const running = byId('P2').run(d);
     await vi.advanceTimersByTimeAsync(95_000);
-    expect(await running).toMatchObject({ status: 'fail', detail: expect.stringContaining('no ping') });
+    expect(await running).toMatchObject({
+      status: 'fail',
+      detail: 'No ping arrived within 90 s. If nobody pressed Write ping in another window during that time, this is not a real result: run P2 again. render fired: no',
+    });
   });
 });
 

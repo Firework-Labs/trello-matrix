@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { buildReport, loadHost, loadResults, saveHost, saveResults, savedHost } from '../../src/proof/results';
+import { buildReport, inRunOrder, loadHost, loadResults, saveHost, saveResults, savedHost } from '../../src/proof/results';
 import type { CheckResult } from '../../src/proof/checks';
 
 const memory = () => {
@@ -39,4 +39,23 @@ test('the REST host P3 found is kept in the tab, and only a known host is accept
 test('the copied report says which authorisation and which REST host were used', () => {
   const report = JSON.parse(buildReport({ browser: 'UA', at: '2026-11-16T00:00:00.000Z', restHost: 'https://trello.com', results: [row('P1')] }));
   expect(report).toEqual({ auth: 'oauth2', restHost: 'https://trello.com', browser: 'UA', at: '2026-11-16T00:00:00.000Z', results: [row('P1')] });
+});
+
+const ids = (rs: CheckResult[]) => rs.map(r => r.id);
+test('results are listed in run order, whatever order they were produced in', () => {
+  const shuffled = ['P4', 'P2', 'P8', 'P1', 'P7', 'P3', 'P6', 'P5'].map(row);
+  expect(ids(inRunOrder(shuffled))).toEqual(['P1', 'P3', 'P5', 'P6', 'P7', 'P8', 'P2', 'P4']);
+  expect(ids(inRunOrder([row('P9'), row('P4'), row('P1')]))).toEqual(['P1', 'P4', 'P9']);   // an id the page does not know goes last
+  const input = [row('P4'), row('P1')];
+  inRunOrder(input);
+  expect(ids(input)).toEqual(['P4', 'P1']);                                                  // the input is not reordered
+});
+test('the copied results keep the ids and list them in run order', () => {
+  const report = JSON.parse(buildReport({ browser: 'UA', at: 'now', restHost: 'https://trello.com', results: ['P2', 'P1', 'P4', 'P3'].map(row) }));
+  expect(ids(report.results)).toEqual(['P1', 'P3', 'P2', 'P4']);
+});
+test('results saved by the previous version (in id order) still load', () => {
+  const tab = memory();
+  tab.setItem('mxproof.results', JSON.stringify(['P1', 'P2', 'P3'].map(row)));
+  expect(ids(loadResults(tab))).toEqual(['P1', 'P2', 'P3']);
 });

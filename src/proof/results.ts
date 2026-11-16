@@ -1,5 +1,6 @@
 // Keeps the results table across page reloads and reopening in the same browser tab,
 // so "Copy results" holds every check, not just the ones run since the last load.
+import { RUN_ORDER } from './checks';
 import type { CheckResult, RestHost } from './checks';
 
 const KEY = 'mxproof.results';
@@ -42,7 +43,13 @@ export function saveHost(storage: ResultStorage | undefined, host: RestHost): vo
   try { storage?.setItem(HOST_KEY, host); } catch { /* carry on without it */ }
 }
 
+/** A copy of the results in run order; an id the page does not know goes last. */
+export function inRunOrder(results: Iterable<CheckResult>): CheckResult[] {
+  const rank = (id: string) => { const i = RUN_ORDER.indexOf(id); return i < 0 ? RUN_ORDER.length : i; };
+  return [...results].sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
+}
+
 /** The text "Copy results" copies. It never holds a token: nothing here is given one. */
 export function buildReport(r: { browser: string; at: string; restHost: RestHost; results: CheckResult[] }): string {
-  return JSON.stringify({ auth: 'oauth2', restHost: r.restHost, browser: r.browser, at: r.at, results: r.results }, null, 2);
+  return JSON.stringify({ auth: 'oauth2', restHost: r.restHost, browser: r.browser, at: r.at, results: inRunOrder(r.results) }, null, 2);
 }

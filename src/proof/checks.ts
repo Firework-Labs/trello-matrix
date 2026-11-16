@@ -25,7 +25,7 @@ export interface CheckDeps {
   /** Tries an <img> with this address. Defaults to a real image element. */
   loadImage?: (url: string) => Promise<boolean>;
 }
-interface Check { id: string; title: string; needsClick: boolean; run(d: CheckDeps): Promise<CheckResult> }
+interface Check { id: string; title: string; /** One line shown under the title on the page: what the person does. */ instruction: string; needsClick: boolean; run(d: CheckDeps): Promise<CheckResult> }
 type Outcome = Pick<CheckResult, 'status' | 'detail'>;
 
 const HOSTS: readonly RestHost[] = ['https://api.trello.com', 'https://trello.com'];
@@ -55,9 +55,9 @@ class NotSignedIn extends Error {
 }
 
 /** `usesRest` checks say in their detail which REST host they used. */
-function check(id: string, title: string, needsClick: boolean, fn: (d: CheckDeps) => Promise<Outcome>, usesRest = false): Check {
+function check(id: string, title: string, instruction: string, needsClick: boolean, fn: (d: CheckDeps) => Promise<Outcome>, usesRest = false): Check {
   return {
-    id, title, needsClick,
+    id, title, instruction, needsClick,
     async run(d) {
       const started = d.now();
       const hostNote = () => (usesRest ? ` (REST host: ${d.host.get()})` : '');
@@ -99,7 +99,7 @@ async function mustBeOk(r: Response, what: string, tok: string): Promise<Respons
 
 // ---- P1: storage on another card id ------------------------------------------
 
-const p1 = check('P1', 'Read and write shared storage on any card by id', false, async d => {
+const p1 = check('P1', 'Read and write shared storage on any card by id', 'Press Run.', false, async d => {
   const cards = await d.t.cards('id');
   const [first, second] = cards;
   if (!first || !second) return { status: 'fail', detail: 'The board needs at least two cards.' };
@@ -125,7 +125,7 @@ export async function writePing(d: Pick<CheckDeps, 't' | 'now'>): Promise<void> 
   await d.t.set(PING[0], PING[1], PING[2], d.now());
 }
 
-const p2 = check('P2', 'A change by another person arrives without a reload', true, async d => {
+const p2 = check('P2', 'A change by another person arrives without a reload', 'Needs a second browser window open on this board with this page (another person, or you in another window). Press Run here, then press Write ping in the other window within 90 seconds.', true, async d => {
   const started = d.now();
   let armed = false;
   let renderFired = false;
@@ -152,7 +152,7 @@ const p2 = check('P2', 'A change by another person arrives without a reload', tr
     armed = false;
     await d.t.remove(...PING).catch(() => undefined); // leave nothing behind in the board's Power-Up data
   }
-  if (seenAfter === null) return { status: 'fail', detail: `no ping seen within ${P2_TIMEOUT_MS / 1000} s. render fired: ${renderFired ? 'yes' : 'no'}` };
+  if (seenAfter === null) return { status: 'fail', detail: `No ping arrived within ${P2_TIMEOUT_MS / 1000} s. If nobody pressed Write ping in another window during that time, this is not a real result: run P2 again. render fired: ${renderFired ? 'yes' : 'no'}` };
   return { status: 'pass', detail: `render fired: ${renderFired ? 'yes' : 'no'}, seen after ${seenAfter} ms (the two computers' clocks may differ by a second or two)` };
 });
 
@@ -173,7 +173,7 @@ async function probeHost(d: CheckDeps, host: RestHost, boardId: string, tok: str
   }
 }
 
-const p3 = check('P3', P3_TITLE, true, async d => {
+const p3 = check('P3', P3_TITLE, 'Press Run and allow access in the window that opens. When the row has a result, reload this page once.', true, async d => {
   // Straight from the click, with nothing awaited first (a browser may block the window after an async gap).
   // Always called, even when a token exists, so every run tests the sign-in itself.
   const signIn = d.auth.authorize();
@@ -227,7 +227,7 @@ export async function p3AfterReload(d: Pick<CheckDeps, 't' | 'now' | 'auth'>): P
 const P4_TITLE = 'What happens to the matrix when a card opens';
 let p4Stamp: string | null = null;
 
-const p4 = check('P4', P4_TITLE, true, async d => {
+const p4 = check('P4', P4_TITLE, 'Press Run, then close the card that opens.', true, async d => {
   const storage = globalThis.sessionStorage;
   if (!storage) throw new Error('sessionStorage is not available in this browser frame.');
   const [first] = await d.t.cards('id');
@@ -268,7 +268,7 @@ function loadImageElement(url: string): Promise<boolean> {
 
 interface RestCard { id: string; cover?: { scaled?: { url: string }[] } | null }
 
-const p5 = check('P5', 'A card cover image can be shown', false, async d => {
+const p5 = check('P5', 'A card cover image can be shown', 'Press Run. Needs a card with a cover image.', false, async d => {
   const tok = await token(d);
   const board = await d.t.board('id');
   const cards: RestCard[] = await (await mustBeOk(await rest(d, tok, 'GET', `/1/boards/${board.id}/cards?fields=id,cover`), 'List cards', tok)).json();
@@ -296,7 +296,7 @@ const p5 = check('P5', 'A card cover image can be shown', false, async d => {
 
 // ---- P6: list position values and request pacing -----------------------------
 
-const p6 = check('P6', 'Which list positions are accepted, and how fast', false, async d => {
+const p6 = check('P6', 'Which list positions are accepted, and how fast', 'Press Run. It moves one card and puts it back.', false, async d => {
   const tok = await token(d);
   const [list] = await d.t.lists('id', 'cards');
   const card = list?.cards?.[0];
@@ -350,7 +350,7 @@ const p6 = check('P6', 'Which list positions are accepted, and how fast', false,
 
 // ---- P7: create a dropdown field and rename one of its options ---------------
 
-const p7 = check('P7', 'A dropdown field can be created and an option renamed', false, async d => {
+const p7 = check('P7', 'A dropdown field can be created and an option renamed', 'Press Run. It adds a temporary field and removes it.', false, async d => {
   const tok = await token(d);
   const board = await d.t.board('id');
   const created = (await (await mustBeOk(await rest(d, tok, 'POST', '/1/customFields', {
@@ -387,7 +387,7 @@ interface RestBoardCards { cards?: { id: string; pluginData?: RestPluginData[] }
 
 // Poll mode builds its snapshot from one board read with the card data included, keeping only this Power-Up's entries
 // (those whose idPlugin is the context's plugin id). A reorder is also about 90 saves in a burst.
-const p8 = check('P8', 'Hidden card data through REST, and a burst of saves', false, async d => {
+const p8 = check('P8', 'Hidden card data through REST, and a burst of saves', 'Press Run. It takes a few seconds.', false, async d => {
   const tok = await token(d);
   const board = await d.t.board('id');
   const [first] = await d.t.cards('id');
@@ -440,3 +440,6 @@ const p8 = check('P8', 'Hidden card data through REST, and a burst of saves', fa
 }, true);
 
 export const checks: Check[] = [p1, p2, p3, p4, p5, p6, p7, p8];
+
+/** The order the page lists the checks and the copied results, and the order docs/proof-script.md runs them. */
+export const RUN_ORDER: readonly string[] = ['P1', 'P3', 'P5', 'P6', 'P7', 'P8', 'P2', 'P4'];

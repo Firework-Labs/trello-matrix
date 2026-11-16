@@ -1,8 +1,8 @@
 import { CLIENT_ID, REDIRECT_URI } from '../config';
 import { createAuth } from '../trello/auth';
-import { checks, p3AfterReload, p4Closed, p4Survived, writeCheckIds, writePing } from './checks';
+import { RUN_ORDER, checks, p3AfterReload, p4Closed, p4Survived, writeCheckIds, writePing } from './checks';
 import type { CheckDeps, CheckResult } from './checks';
-import { buildReport, loadHost, savedHost, loadResults, saveHost, saveResults } from './results';
+import { buildReport, inRunOrder, loadHost, savedHost, loadResults, saveHost, saveResults } from './results';
 
 const storage = (() => { try { return window.sessionStorage; } catch { return undefined; } })();
 const t = TrelloPowerUp.iframe({ clientId: CLIENT_ID, redirectUri: REDIRECT_URI });
@@ -28,7 +28,7 @@ const RUNNING = 'Running…';
 
 function renderResults() {
   resultsBody.replaceChildren(
-    ...[...results.values()].sort((a, b) => a.id.localeCompare(b.id)).map(r =>
+    ...inRunOrder(results.values()).map(r =>
       el('tr', {}, el('td', {}, r.id), el('td', {}, r.title), el('td', { className: r.status }, r.status),
         el('td', {}, r.detail), el('td', {}, r.ms === undefined ? '' : String(r.ms)))),
   );
@@ -54,13 +54,16 @@ function runButton(id: string, run: () => Promise<void>, writes: boolean) {
   return button;
 }
 
-const checkRows = checks.map(c => {
+const PING_LABEL = 'Write ping (press in the other window)';
+const inRunOrderChecks = RUN_ORDER.map(id => checks.find(c => c.id === id)!);
+
+const checkRows = inRunOrderChecks.map((c, i) => {
   const actions: HTMLElement[] = [runButton(c.id, async () => {
     show({ id: c.id, title: c.title, status: 'manual', detail: RUNNING });
     show(await c.run(deps));
   }, writeCheckIds.includes(c.id))];
   if (c.id === 'P2') {
-    const ping = el('button', { textContent: 'Write ping' });
+    const ping = el('button', { textContent: PING_LABEL });
     ping.disabled = true;
     writeButtons.push(ping);
     ping.addEventListener('click', async () => {
@@ -69,7 +72,9 @@ const checkRows = checks.map(c => {
     actions.push(ping);
   }
   const note = c.needsClick ? ' (press this yourself)' : '';
-  return el('tr', {}, el('td', {}, c.id), el('td', {}, c.title, el('span', { className: 'note', textContent: note })), el('td', {}, ...actions));
+  return el('tr', {}, el('td', {}, `${i + 1}. ${c.id}`),
+    el('td', {}, c.title, el('span', { className: 'note', textContent: note }), el('div', { className: 'note', textContent: c.instruction })),
+    el('td', {}, ...actions));
 });
 
 const copyBox = el('textarea', { readOnly: true, hidden: true });
@@ -87,9 +92,10 @@ document.getElementById('app')!.append(
   el('h1', {}, 'Matrix checks'),
   el('p', {}, 'These checks find out what Trello allows. Follow the script you were sent. The results stay in this browser tab until it is closed, and are sent nowhere.'),
   ...(CLIENT_ID ? [] : [el('p', { className: 'fail' }, 'This page was built without a Trello client ID, so sign-in (P3) will fail. See docs/setup.md, Part 3.')]),
+  el('p', {}, 'Run the checks from top to bottom.'),
   el('label', {}, testBoard, ' This is a test board'),
   el('p', { className: 'note' }, 'The checks that write to the board stay switched off until you tick the box.'),
-  el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Check'), el('th', {}, 'What it finds out'), el('th', {}, ''))), el('tbody', {}, ...checkRows)),
+  el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Step and check'), el('th', {}, 'What it finds out'), el('th', {}, ''))), el('tbody', {}, ...checkRows)),
   el('h2', {}, 'Results'),
   el('table', {}, el('thead', {}, el('tr', {}, ...['Check', 'Title', 'Result', 'Detail', 'ms'].map(h => el('th', {}, h)))), resultsBody),
   copyButton,
