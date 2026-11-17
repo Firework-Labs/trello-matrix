@@ -47,13 +47,16 @@ prioritising a backlog. Static site, no server, all data in Trello.
 - `docs/proof-results.md` what the live checks showed; `docs/acceptance.md` the checklist Mike runs on the
   test board, in rounds (Round 1 is solo in Chrome; later rounds add people and Safari).
 - `dev.html` runs the matrix on sample data: `npm run dev`, then open
-  `http://localhost:5173/trello-matrix/dev.html`.
+  `http://localhost:5173/trello-matrix/dev.html`. It is never published
+  (`build-inputs.ts`); the browser tests run it on the dev server.
 
 ## Running and testing
 
 - `npm test` (Vitest), `npx tsc --noEmit`, `npm run build`.
 - `npx playwright test` runs the browser tests in Chromium and WebKit. A fresh
-  machine needs `npx playwright install chromium webkit` first.
+  machine needs `npm ci` and `npx playwright install chromium webkit` first
+  (each checkout, the main one and `.worktrees/matrix-build`, has its own
+  `node_modules`).
 - Two WebKit drag tests compare positions within 0.5 px and rely on the
   toolbar being 45 px high and the legend 30 px high.
 
@@ -96,3 +99,9 @@ prioritising a backlog. Static site, no server, all data in Trello.
   `TRELLO_CLIENT_ID` (the OAuth 2.0 client ID) and `PROOF` (`1` or `0`).
 - Do not publish while Mike is in the middle of a check or acceptance run
   unless he is blocked on the fix.
+- GitHub keeps published pages for up to 10 minutes and Trello caches a
+  Power-Up's buttons, so a changed or removed button can linger after a
+  publish. Check the live bundle before assuming a publish failed.
+- The Power-Up stays private to Mike's workspace (decided 2026-11-17). A
+  public listing would need a support email, privacy policy, a sign-out and
+  Trello's review; do not start one without Mike asking.
