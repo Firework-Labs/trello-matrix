@@ -4,7 +4,7 @@ import { StoreError, type BoardStore, type Progress } from '../../src/store/boar
 import type { TrelloAuth } from '../../src/trello/auth';
 import { KEY_CARD, KEY_PARAMS, KEY_REORDER, KEY_VIEW } from '../../src/trello/plugin-data';
 import type { Rest } from '../../src/trello/rest';
-import { createTrelloStore } from '../../src/trello/trello-store';
+import { POLL_MS, createTrelloStore } from '../../src/trello/trello-store';
 
 // ---------------------------------------------------------------- fakes
 
@@ -164,7 +164,7 @@ function makeAuth() {
   return Object.assign(auth, ctl, { ctl });
 }
 
-function setup() {
+function setup(opts: { isVisible?: () => boolean } = {}) {
   const w = newWorld();
   const t = makeT(w);
   const rest = makeRest(w);
@@ -176,6 +176,7 @@ function setup() {
     now: () => w.clock,
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: h => clearTimeout(h as ReturnType<typeof setTimeout>),
+    ...opts,
   });
   return { w, t, rest, auth, st };
 }
@@ -997,7 +998,7 @@ describe('subscribe', () => {
     expect(w.cardsCalls).toBe(1);
     expect(got).toHaveLength(1);
     expect(got[0]!.cards.map(c => c.id)).toEqual(['c1', 'c2', 'c3', 'c4']);
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(POLL_MS - 300);           // nothing more before the steady read
     await settle();
     expect(w.cardsCalls).toBe(1);
   });
@@ -1029,9 +1030,63 @@ describe('subscribe', () => {
     expect(got).toHaveLength(2);
     expect(other).toHaveLength(2);
     expect(cardIn(got[1]!, 'c2').name).toBe('Renamed');
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(POLL_MS - 1000);          // nothing more before the steady read
     await settle();
     expect(got).toHaveLength(2);
+  });
+
+  test('with no render notice, a change is still delivered by the steady read within POLL_MS and 200 ms', async () => {
+    const { w, st } = setup();
+    const got: BoardSnapshot[] = [];
+    st.subscribe(s => got.push(s));
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(got).toHaveLength(1);
+    raw(w, 'c2').name = 'Moved by someone else';            // Trello sends no render
+    await vi.advanceTimersByTimeAsync(POLL_MS + 200);
+    await settle();
+    expect(got.length).toBeGreaterThanOrEqual(2);
+    expect(cardIn(got.at(-1)!, 'c2').name).toBe('Moved by someone else');
+  });
+
+  test('the steady read reads once per POLL_MS, and not while the page cannot be seen', async () => {
+    let visible = true;
+    const { w, st } = setup({ isVisible: () => visible });
+    st.subscribe(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    const first = w.cardsCalls;
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+    await settle();
+    expect(w.cardsCalls).toBe(first + 3);
+    visible = false;
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+    await settle();
+    expect(w.cardsCalls).toBe(first + 3);
+    visible = true;
+    await vi.advanceTimersByTimeAsync(POLL_MS + 200);
+    await settle();
+    expect(w.cardsCalls).toBe(first + 4);
+  });
+
+  test('a steady read waits for an own write, like any other, and is not delivered stale', async () => {
+    const { w, rest, st } = setup();
+    const param = paramNamed(await st.load(), 'f1');
+    const got: BoardSnapshot[] = [];
+    st.subscribe(s => got.push(s));
+    await vi.advanceTimersByTimeAsync(200);
+    await settle();
+    let open!: () => void;
+    rest.gate = new Promise<void>(resolve => { open = resolve; });
+    const write = st.setLevel('c2', param, 2);
+    const reads = w.cardsCalls;
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2);
+    await settle();
+    expect(w.cardsCalls).toBe(reads);                       // held back while the write is under way
+    open();
+    await write;
+    await settle();
+    expect(cardIn(got.at(-1)!, 'c2').fieldOptions).toEqual({ f1: 'oHigh' });
   });
 
   test('after unsubscribing nothing is delivered and nothing is read; a render with no subscriber does nothing', async () => {
@@ -1050,10 +1105,10 @@ describe('subscribe', () => {
     expect(got).toHaveLength(1);
   });
 
-  test('the last unsubscribe inside the window takes the pending timer away', async () => {
+  test('the last unsubscribe inside the window takes the pending timers away, and the steady read', async () => {
     const { w, st } = setup();
     const off = st.subscribe(() => {});
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(2);                        // the first read and the steady read
     off();
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(1000);
@@ -1068,7 +1123,7 @@ describe('subscribe', () => {
     const offA = st.subscribe(s => a.push(s));
     const offB = st.subscribe(s => b.push(s));
     offA();
-    expect(vi.getTimerCount()).toBe(1);                    // the other subscriber still wants its read
+    expect(vi.getTimerCount()).toBe(2);                    // the other subscriber still wants its read, and the steady read
     await vi.advanceTimersByTimeAsync(200);
     await settle();
     expect(a).toHaveLength(0);

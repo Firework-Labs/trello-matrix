@@ -17,6 +17,8 @@ export interface StartDeps {
   setTimeout: (fn: () => void, ms: number) => unknown;
   clearTimeout: (handle: unknown) => void;
   newId: () => string;
+  /** Whether the page can be seen (the store's steady read pauses while it cannot). Default: always. */
+  isVisible?: () => boolean;
 }
 
 /** Trello's limit is 100 requests per 10 seconds per person; this stays under it. */
@@ -32,6 +34,7 @@ export async function startMatrix(deps: StartDeps): Promise<{ destroy(): void }>
   });
   const store = createTrelloStore({
     t, rest, auth, newId: deps.newId, now: deps.now, setTimeout: deps.setTimeout, clearTimeout: deps.clearTimeout,
+    ...(deps.isVisible ? { isVisible: deps.isVisible } : {}),
   });
   const focus: unknown = t.arg('focusCardId');
   return await deps.mount(deps.root, store, {
@@ -54,7 +57,7 @@ export interface BootEnv {
     setTimeout(fn: () => void, ms: number): unknown;
     clearTimeout(handle: unknown): void;
   };
-  document: { getElementById(id: string): HTMLElement | null; body: HTMLElement };
+  document: { getElementById(id: string): HTMLElement | null; body: HTMLElement; visibilityState?: string };
   mount: typeof mountMatrix;
 }
 
@@ -80,6 +83,7 @@ export async function bootMatrix(env: BootEnv): Promise<void> {
       setTimeout: (fn, ms) => w.setTimeout(fn, ms),
       clearTimeout: handle => { w.clearTimeout(handle); },
       newId: () => w.crypto.randomUUID(),
+      isVisible: () => env.document.visibilityState !== 'hidden',
     });
   } catch {
     try { (target ?? env.document.body).textContent = COULD_NOT_START; } catch { /* nothing more can be done */ }

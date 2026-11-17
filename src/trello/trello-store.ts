@@ -21,6 +21,13 @@ import { coverUrls, toSnapshot, type RawBoardData } from './snapshot';
 const RELOAD_DELAY_MS = 200;
 
 /**
+ * While anyone is subscribed and the page can be seen, the board is also read this often. Trello's render notice did not
+ * reliably arrive for another window's or person's changes (acceptance lines 16 and 17, 2026-11-17); this read goes
+ * through the Power-Up library, so it makes no REST request and does not count against Trello's request limit.
+ */
+export const POLL_MS = 3000;
+
+/**
  * A read, or one call to Trello's plugin storage, that has not answered by now is given up on. Without this, one call that
  * never answers would hold every later read behind it, and a write's lock and "under way" count for good.
  */
@@ -81,6 +88,8 @@ export function createTrelloStore(o: {
   now: () => number;
   setTimeout: (fn: () => void, ms: number) => unknown;
   clearTimeout: (handle: unknown) => void;
+  /** Whether the page can be seen; the steady read is skipped while it cannot. Default: always. */
+  isVisible?: () => boolean;
 }): BoardStore {
   const { t, rest, auth } = o;
   const overlay = createOverlay({ now: o.now });
@@ -316,6 +325,17 @@ export function createTrelloStore(o: {
     timer = o.setTimeout(() => { timer = null; void reload(); }, RELOAD_DELAY_MS);
   }
 
+  /** The steady read: every POLL_MS while subscribed. A read already pending or under way counts as this one. */
+  let pollTimer: unknown = null;
+  function schedulePoll() {
+    pollTimer = o.setTimeout(() => {
+      pollTimer = null;
+      if (subscribers.size === 0) return;
+      if (!reloading && (o.isVisible?.() ?? true)) scheduleReload();
+      schedulePoll();
+    }, POLL_MS);
+  }
+
   // ------------------------------------------------------------ the store
 
   return {
@@ -342,9 +362,12 @@ export function createTrelloStore(o: {
         t.render(() => { if (subscribers.size > 0) scheduleReload(); });   // the library has no way to take it back
       }
       scheduleReload();
+      if (pollTimer === null) schedulePoll();
       return () => {
         subscribers.delete(subscriber);
-        if (subscribers.size === 0 && timer !== null) { o.clearTimeout(timer); timer = null; }
+        if (subscribers.size > 0) return;
+        if (timer !== null) { o.clearTimeout(timer); timer = null; }
+        if (pollTimer !== null) { o.clearTimeout(pollTimer); pollTimer = null; }
       };
     },
 
