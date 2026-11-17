@@ -120,6 +120,14 @@ needs a Trello account that is linked to an Atlassian account.
   the connector URL in Part 2 step 3 has no typing mistake, and that Pages
   shows the site as published. A **Matrix checks** button shows only while the
   variable `PROOF` is `1`.
+- **Matrix is not in the board's top bar**: Trello hides a Power-Up's board
+  buttons until someone chooses to show them. Open the **Power-Ups** menu in the
+  board header, press "…" next to Matrix, and choose **Show on board**. A narrow
+  window can also push buttons into an overflow menu.
+- **A button still shows after a publish changed it** (for example **Matrix
+  checks** after `PROOF` went to `0`): GitHub keeps the old page for up to 10
+  minutes and Trello may keep the old buttons a little longer. Wait, then reload
+  the board.
 - **Page not found at the connector URL**: Part 1 step 5 was missed, or the
   publish has not finished. Check the Actions tab.
 - **"Matrix checks" opens but the page says it was built without a Trello

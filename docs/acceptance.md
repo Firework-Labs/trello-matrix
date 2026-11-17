@@ -136,8 +136,10 @@ opened on.
    (do not delete it).
 2. Open the **Actions** tab, click **Publish to GitHub Pages**, press **Run
    workflow**, and wait for the green tick.
-3. Open the test board. Check that the **Matrix checks** button is gone (look
-   under the "…" menu too). If it is still there, do not go on: tell the agent.
+3. Wait 10 minutes after the green tick (GitHub keeps the old page that long),
+   then open or reload the test board. Check that the **Matrix checks** button
+   is gone (look under the "…" menu too). If it is still there, do not go on:
+   tell the agent.
 
 ## Numbering before 2026-11-16
 
