@@ -78,6 +78,10 @@ Mike ran the acceptance checklist on the test board in Chrome and Safari
   a change Trello refused part way (a field made but not added), and while it
   is open it shows fields made in Trello, so **Link** is offered without a
   reload.
+- **Level colours come from Trello.** Colouring by a parameter uses the colours
+  set on the dropdown's options in Trello's Custom Fields editor. A field the
+  matrix creates has none until they are set there; Mike confirmed this is
+  what he wants, so the matrix does not choose colours itself.
 
 ## 1. Intent
 

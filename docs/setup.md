@@ -120,10 +120,11 @@ needs a Trello account that is linked to an Atlassian account.
   the connector URL in Part 2 step 3 has no typing mistake, and that Pages
   shows the site as published. A **Matrix checks** button shows only while the
   variable `PROOF` is `1`.
-- **Matrix is not in the board's top bar**: Trello hides a Power-Up's board
-  buttons until someone chooses to show them. Open the **Power-Ups** menu in the
-  board header, press "…" next to Matrix, and choose **Show on board**. A narrow
-  window can also push buttons into an overflow menu.
+- **Matrix is not in the board's top bar**: the header has room for only so
+  many Power-Up buttons. On the test board Matrix appeared once another
+  Power-Up was disabled (2026-11-17). Otherwise open the **Power-Ups** menu in
+  the board header, press "…" next to Matrix, and choose **Show on board**. A
+  narrow window can also push buttons into an overflow menu.
 - **A button still shows after a publish changed it** (for example **Matrix
   checks** after `PROOF` went to `0`): GitHub keeps the old page for up to 10
   minutes and Trello may keep the old buttons a little longer. Wait, then reload

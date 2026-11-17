@@ -15,16 +15,16 @@ matrix) and carries on.
 ## Re-run after the fixes of 2026-11-17
 
 All four rounds were run on 2026-11-17; the results are in the tables below.
-These lines are what is left. R1 and R2 need only you; R3 needs Person B.
+These lines were what was left; all three passed on 2026-11-17.
 
 Retired: lines **11**, **19** and **S6** (the **Resequence lists** feature is
 removed) and line **18** (observers do not need the matrix).
 
 | No. | What to do | What you must see | Result |
 |-----|------------|-------------------|--------|
-| R1 | Reload the board, press **Matrix**, and look along the bar at the top of the matrix. Then press **Parameters…**, type a new name such as **Risk**, choose **2 levels**, and press **Add parameter**. | There is no **Resequence lists…** button. Risk appears as a row with no reload. If instead a message says the field was made but not added, typing Risk offers **Link** straight away, with no reload. (You can press **Remove** on Risk afterwards; the field stays in Trello.) | |
-| R2 | Line 16 again: two Chrome windows side by side, the matrix open in both. In the second, drag a placed card to the opposite corner. Do not touch the first window. | The first window shows the card in its new place within about 3 seconds, with no zoom or reload. | |
-| R3 | Line 17 again, with Person B: B drags a card from the bottom left to the top right while you watch. | You see the move within about 3 seconds. | |
+| R1 | Reload the board, press **Matrix**, and look along the bar at the top of the matrix. Then press **Parameters…**, type a new name such as **Risk**, choose **2 levels**, and press **Add parameter**. | There is no **Resequence lists…** button. Risk appears as a row with no reload. If instead a message says the field was made but not added, typing Risk offers **Link** straight away, with no reload. (You can press **Remove** on Risk afterwards; the field stays in Trello.) | Pass (2026-11-17) |
+| R2 | Line 16 again: two Chrome windows side by side, the matrix open in both. In the second, drag a placed card to the opposite corner. Do not touch the first window. | The first window shows the card in its new place within about 3 seconds, with no zoom or reload. | Pass (2026-11-17) |
+| R3 | Line 17 again, with Person B: B drags a card from the bottom left to the top right while you watch. | You see the move within about 3 seconds. | Pass (2026-11-17) |
 
 Words used here:
 
