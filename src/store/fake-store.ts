@@ -1,7 +1,6 @@
 import { clampPosition } from '../model/placement';
-import { positionsFor } from '../model/resequence';
 import type { BoardSnapshot, Card, DropdownField, ViewSettings } from '../model/types';
-import { StoreError, type BoardStore, type ListOrder, type NewParameter, type Progress } from './board-store';
+import { StoreError, type BoardStore, type NewParameter } from './board-store';
 import {
   parameterFromField, parameterNamed, validateLink, validateNewParameter, validateRenameLevel, validateRenameParameter,
 } from './parameter-rules';
@@ -23,14 +22,12 @@ const invalid = (message: string) => new StoreError('invalid', message);
 /** The methods that change the board: after one of these, a store with `staleReads` serves old reads for a while. */
 const WRITES = new Set<keyof BoardStore>([
   'savePositions', 'setLevel', 'createParameter', 'linkParameter', 'renameParameter', 'renameLevel',
-  'removeParameter', 'reorderLists', 'undoReorder',
+  'removeParameter',
 ]);
 
 export interface FakeStoreOptions {
   snapshot?: BoardSnapshot;
   connected?: boolean;
-  /** The first `reorderLists` with more cards than this writes this many, then rejects once with a network error. */
-  reorderFailAfter?: number;
   /**
    * Models a store that reads from a cache which lags its own writes: after every write, the next this-many `load()`
    * calls return the board as it was before that write began. Default 0 (reads are always current).
@@ -42,9 +39,6 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
   let board: BoardSnapshot = structuredClone(o.snapshot ?? sampleSnapshot());
   let connected = o.connected ?? true;
   let view: ViewSettings | null = null;
-  let undoPositions: Map<string, number> | null = null;
-  let reorderInterrupted = false;                 // the last reorder stopped part-way, so the next one is its retry
-  let failReorderAfter = o.reorderFailAfter;      // spent once it has fired
   const subscribers = new Set<(snap: BoardSnapshot) => void>();
   const failures = new Map<string, StoreError>();
   const calls: FakeStore['calls'] = [];
@@ -172,35 +166,6 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
       // positions all stay, so linking the field again restores every card's exact spot.
     },
 
-    async reorderLists(orders: ListOrder[], onProgress) {
-      enter('reorderLists', [orders, onProgress]);
-      const changes: { cardId: string; pos: number }[] = [];
-      for (const order of orders) {
-        const inList = new Set(board.cards.filter(c => c.idList === order.listId).map(c => c.id));
-        const ids = [...new Set(order.cardIds)].filter(id => inList.has(id));
-        changes.push(...positionsFor(ids));
-      }
-      // A retry keeps the positions saved by the first attempt (the cards it moved are no longer where they were).
-      const saved = reorderInterrupted && undoPositions ? undoPositions : new Map<string, number>();
-      for (const { cardId } of changes) if (!saved.has(cardId)) saved.set(cardId, cardNamed(cardId).pos);
-      undoPositions = saved;
-      board.canUndoReorder = true;
-      reorderInterrupted = true;
-      const stopAfter = failReorderAfter !== undefined && failReorderAfter < changes.length ? failReorderAfter : undefined;
-      if (stopAfter !== undefined) failReorderAfter = undefined;
-      applyPositions(changes, onProgress, stopAfter);
-      reorderInterrupted = false;
-    },
-
-    async undoReorder(onProgress) {
-      enter('undoReorder', [onProgress]);
-      if (!undoPositions) throw invalid('Nothing to undo');
-      applyPositions([...undoPositions].map(([cardId, pos]) => ({ cardId, pos })), onProgress);
-      undoPositions = null;
-      reorderInterrupted = false;
-      board.canUndoReorder = false;
-    },
-
     async openCard(cardId) { enter('openCard', [cardId]); },
 
     async coverImageUrl(cardId) {
@@ -212,15 +177,6 @@ export function createFakeStore(o: FakeStoreOptions = {}): FakeStore {
     async loadView() { checkFailure('loadView'); return view ? structuredClone(view) : null; },
     async saveView(next) { checkFailure('saveView'); view = structuredClone(next); },
   };
-
-  /** Writes the positions one card at a time; with `stopAfter` it rejects once that many are written. */
-  function applyPositions(changes: { cardId: string; pos: number }[], onProgress: (p: Progress) => void, stopAfter?: number) {
-    changes.forEach(({ cardId, pos }, i) => {
-      cardNamed(cardId).pos = pos;
-      onProgress({ done: i + 1, total: changes.length });
-      if (i + 1 === stopAfter) throw new StoreError('network', 'offline');
-    });
-  }
 
   return store;
 }

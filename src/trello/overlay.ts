@@ -6,8 +6,6 @@ import { joinParameters, type StoredParam } from './plugin-data';
 export interface Overlay {
   /** We set this card's dropdown value from `was` to `optionId` (null means cleared). */
   noteFieldOption(cardId: string, fieldId: string, optionId: string | null, was: string | null): void;
-  /** We set this card's list position from `was` to `pos`. */
-  noteCardPos(cardId: string, pos: number, was: number): void;
   /** We created this dropdown field. */
   noteField(field: DropdownField): void;
   /** Returns the snapshot with the noted writes it does not show yet laid over it. Never changes its argument. */
@@ -30,7 +28,6 @@ const copyField = (f: DropdownField): DropdownField => ({ ...f, options: f.optio
 export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay {
   const ttlMs = o.ttlMs ?? 15000;
   const fieldNotes = new Map<string, Map<string, Note<string | null>>>();   // card id → field id → note
-  const posNotes = new Map<string, Note<number>>();                         // card id → note
   const fieldCreates = new Map<string, { field: DropdownField; at: number }>();
 
   const expired = (at: number) => o.now() - at > ttlMs;
@@ -55,7 +52,6 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
       for (const [fieldId, n] of byField) if (expired(n.at)) byField.delete(fieldId);
       if (byField.size === 0) fieldNotes.delete(cardId);
     }
-    for (const [cardId, n] of posNotes) if (expired(n.at)) posNotes.delete(cardId);
     for (const [fieldId, n] of fieldCreates) if (expired(n.at)) fieldCreates.delete(fieldId);
   }
 
@@ -66,16 +62,9 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
 
     // Notes about cards that are gone are forgotten first.
     for (const cardId of [...fieldNotes.keys()]) if (!known.has(cardId)) fieldNotes.delete(cardId);
-    for (const cardId of [...posNotes.keys()]) if (!known.has(cardId)) posNotes.delete(cardId);
 
     const cards = snap.cards.map((card): Card => {
       let next = card;
-      const posNote = posNotes.get(card.id);
-      if (posNote) {
-        const verdict = judge(posNote, card.pos);
-        if (verdict === 'stale') { if (card.pos !== posNote.value) next = { ...next, pos: posNote.value }; }
-        else posNotes.delete(card.id);
-      }
       const byField = fieldNotes.get(card.id);
       if (byField) {
         for (const [fieldId, note] of byField) {
@@ -115,10 +104,6 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
       if (!byField) fieldNotes.set(cardId, byField = new Map());
       byField.set(fieldId, replace(byField.get(fieldId), optionId, was));
     },
-    noteCardPos(cardId, pos, was) {
-      forgetExpired();
-      posNotes.set(cardId, replace(posNotes.get(cardId), pos, was));
-    },
     noteField(field) {
       forgetExpired();
       fieldCreates.set(field.id, { field: copyField(field), at: o.now() });
@@ -126,7 +111,7 @@ export function createOverlay(o: { now: () => number; ttlMs?: number }): Overlay
     apply,
     pending() {
       forgetExpired();
-      let n = posNotes.size + fieldCreates.size;
+      let n = fieldCreates.size;
       for (const byField of fieldNotes.values()) n += byField.size;
       return n;
     },

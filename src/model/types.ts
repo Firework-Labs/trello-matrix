@@ -14,7 +14,7 @@ export interface BoardSnapshot {
   lists: List[]; cards: Card[]; labels: Label[]; members: Member[];
   dropdownFields: DropdownField[]; parameters: Parameter[];
   placements: Record<string, Placement>;            // by card id; a missing entry means no positions
-  canEdit: boolean; canUndoReorder: boolean;
+  canEdit: boolean;
 }
 export type ColourBy = { kind: 'label' } | { kind: 'list' } | { kind: 'member' } | { kind: 'field'; fieldId: string };
 export interface ViewSettings {

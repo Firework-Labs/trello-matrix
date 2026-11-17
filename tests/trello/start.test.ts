@@ -49,7 +49,6 @@ function setup(o: { arg?: (name: string) => unknown; fetchImpl?: typeof fetch } 
     sleep: async ms => { slept.push(ms); clock += ms; },
     setTimeout: (fn, ms) => { const h = {}; timers.push({ fn, ms, handle: h }); return h; },
     clearTimeout: h => { cleared.push(h); },
-    newId: () => 'id1',
   };
   return { deps, root, iframeCalls, mountCalls, handle, requests, timers, cleared, slept };
 }
@@ -68,7 +67,7 @@ describe('startMatrix', () => {
     const call = s.mountCalls[0]!;
     expect(call.root).toBe(s.root);
     for (const method of ['isConnected', 'connect', 'load', 'subscribe', 'savePositions', 'setLevel', 'createParameter', 'linkParameter',
-      'renameParameter', 'renameLevel', 'removeParameter', 'reorderLists', 'undoReorder', 'openCard', 'coverImageUrl', 'loadView', 'saveView']) {
+      'renameParameter', 'renameLevel', 'removeParameter', 'openCard', 'coverImageUrl', 'loadView', 'saveView']) {
       expect(typeof (call.store as unknown as Record<string, unknown>)[method]).toBe('function');
     }
     expect(call.options.canRenameLevels).toBe(false);
@@ -167,7 +166,6 @@ describe('bootMatrix', () => {
         TrelloPowerUp: library as BootEnv['window']['TrelloPowerUp'],
         fetch: (async () => new Response('{}')) as typeof fetch,
         performance: { now: () => 0 },
-        crypto: { randomUUID: () => 'id1' },
         setTimeout: () => ({}), clearTimeout: () => {},
       },
       document: {

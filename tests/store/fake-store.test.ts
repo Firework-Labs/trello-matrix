@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { BoardSnapshot, Card, Parameter, ViewSettings } from '../../src/model/types';
 import { levelOf, locate } from '../../src/model/placement';
-import { StoreError, type Progress } from '../../src/store/board-store';
+import { StoreError } from '../../src/store/board-store';
 import { createFakeStore } from '../../src/store/fake-store';
 import { sampleSnapshot } from '../../src/store/sample-data';
 
@@ -15,9 +15,6 @@ const param = (s: BoardSnapshot, id: string): Parameter => {
   if (!p) throw new Error(`no parameter ${id}`);
   return p;
 };
-/** Ids of one list's cards in the order Trello would show them (ascending pos). */
-const inListOrder = (s: BoardSnapshot, listId: string): string[] =>
-  s.cards.filter(c => c.idList === listId).sort((a, b) => a.pos - b.pos).map(c => c.id);
 
 const generated = (s: BoardSnapshot): Card[] => s.cards.filter(c => !['c1', 'c2', 'c3', 'c4'].includes(c.id));
 const optionIdFor = (p: Parameter, position: number): string => p.optionIds[levelOf(position, p.levels.length)]!;
@@ -57,7 +54,6 @@ describe('sample board', () => {
     ]);
     expect(impacts.options.find(o => o.text === 'iOS only')!.id).toBe('opt-ios');
     expect(s.canEdit).toBe(true);
-    expect(s.canUndoReorder).toBe(false);
   });
 
   test('fixture cards c1 to c4', () => {
@@ -309,90 +305,6 @@ describe('fake store', () => {
     await expect(st.renameParameter('nope', 'x')).rejects.toMatchObject({ kind: 'invalid' });
   });
 
-  test('reorderLists then undoReorder restores the exact positions', async () => {
-    const st = createFakeStore();
-    const before = (await st.load()).cards.filter(c => c.idList === 'l-backlog').map(c => [c.id, c.pos]);
-    const ids = before.map(b => b[0] as string).reverse();
-    const seen: Progress[] = [];
-    await st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], p => seen.push(p));
-    expect(inListOrder(await st.load(), 'l-backlog')).toEqual(ids);
-    expect(seen.at(-1)).toEqual({ done: ids.length, total: ids.length });
-    expect(seen).toHaveLength(ids.length);
-    expect((await st.load()).canUndoReorder).toBe(true);
-    await st.undoReorder(() => {});
-    expect((await st.load()).cards.filter(c => c.idList === 'l-backlog').map(c => [c.id, c.pos])).toEqual(before);
-    expect((await st.load()).canUndoReorder).toBe(false);
-  });
-
-  test('reorderLists handles several lists, reports progress per card, and ignores ids from other lists', async () => {
-    const st = createFakeStore();
-    const s0 = await st.load();
-    const ideas = inListOrder(s0, 'l-ideas').reverse();
-    const doing = inListOrder(s0, 'l-doing').reverse();
-    const foreign = inListOrder(s0, 'l-backlog')[0]!;
-    const foreignPos = byId(s0, foreign).pos;
-    const seen: Progress[] = [];
-    await st.reorderLists(
-      [{ listId: 'l-ideas', cardIds: [...ideas, foreign] }, { listId: 'l-doing', cardIds: doing }],
-      p => seen.push(p),
-    );
-    const total = ideas.length + doing.length;
-    expect(seen.map(p => p.done)).toEqual(Array.from({ length: total }, (_, i) => i + 1));
-    expect(seen.every(p => p.total === total)).toBe(true);
-    const s1 = await st.load();
-    expect(inListOrder(s1, 'l-ideas')).toEqual(ideas);
-    expect(inListOrder(s1, 'l-doing')).toEqual(doing);
-    expect(byId(s1, foreign).idList).toBe('l-backlog');
-    expect(byId(s1, foreign).pos).toBe(foreignPos);
-    await st.undoReorder(() => {});
-    expect(inListOrder(await st.load(), 'l-ideas')).toEqual(inListOrder(s0, 'l-ideas'));
-  });
-
-  test('reorderFailAfter makes one reorder stop after that many cards, and the next one finish', async () => {
-    const st = createFakeStore({ reorderFailAfter: 3 });
-    const s0 = await st.load();
-    const ids = inListOrder(s0, 'l-backlog').reverse();
-    const seen: Progress[] = [];
-    const err = await st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], p => seen.push(p)).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(StoreError);
-    expect(err).toMatchObject({ kind: 'network', message: 'offline' });
-    expect(seen.map(p => p.done)).toEqual([1, 2, 3]);
-    expect(seen.every(p => p.total === ids.length)).toBe(true);
-    const s1 = await st.load();
-    expect(ids.slice(0, 3).map(id => byId(s1, id).pos)).toEqual([16384, 32768, 49152]);       // the first three were written
-    expect(byId(s1, ids[3]!).pos).toBe(byId(s0, ids[3]!).pos);                                // the rest were not
-    await st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], () => {});                 // it fails only once
-    expect(inListOrder(await st.load(), 'l-backlog')).toEqual(ids);
-  });
-
-  test('undo after a reorder that was retried returns to the order from before the first attempt', async () => {
-    const st = createFakeStore({ reorderFailAfter: 3 });
-    const s0 = await st.load();
-    const before = s0.cards.filter(c => c.idList === 'l-backlog').map(c => [c.id, c.pos]);
-    const ids = inListOrder(s0, 'l-backlog').reverse();
-    await expect(st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], () => {})).rejects.toBeInstanceOf(StoreError);
-    expect((await st.load()).canUndoReorder).toBe(true);                                      // the cards that moved can be put back
-    await st.reorderLists([{ listId: 'l-backlog', cardIds: ids }], () => {});                 // the retry
-    expect(inListOrder(await st.load(), 'l-backlog')).toEqual(ids);
-    await st.undoReorder(() => {});
-    expect((await st.load()).cards.filter(c => c.idList === 'l-backlog').map(c => [c.id, c.pos])).toEqual(before);
-    expect((await st.load()).canUndoReorder).toBe(false);
-  });
-
-  test('a reorder that follows a completed one saves its own previous positions', async () => {
-    const st = createFakeStore();
-    const ids = inListOrder(await st.load(), 'l-doing');
-    await st.reorderLists([{ listId: 'l-doing', cardIds: [...ids].reverse() }], () => {});
-    const middle = await st.load();
-    await st.reorderLists([{ listId: 'l-doing', cardIds: ids }], () => {});
-    await st.undoReorder(() => {});
-    expect(inListOrder(await st.load(), 'l-doing')).toEqual(inListOrder(middle, 'l-doing'));  // back to after the first, not before it
-  });
-
-  test('undoReorder with nothing to undo is rejected as invalid', async () => {
-    await expect(createFakeStore().undoReorder(() => {})).rejects.toMatchObject({ kind: 'invalid' });
-  });
-
   test('failNext rejects once and changes nothing', async () => {
     const st = createFakeStore(); st.failNext('setLevel', new StoreError('network', 'offline'));
     await expect(st.setLevel('c1', param(await st.load(), 'f-cost'), 0)).rejects.toMatchObject({ kind: 'network' });
@@ -407,13 +319,6 @@ describe('fake store', () => {
     expect(err).toBeInstanceOf(StoreError);
     expect(err).toMatchObject({ kind: 'network', message: 'Simulated failure' });
     await expect(st.load()).resolves.toBeDefined();
-  });
-
-  test('a failed reorder changes nothing and keeps undo unavailable', async () => {
-    const st = createFakeStore(); const before = st.snapshot();
-    st.failNext('reorderLists');
-    await expect(st.reorderLists([{ listId: 'l-doing', cardIds: inListOrder(before, 'l-doing').reverse() }], () => {})).rejects.toBeInstanceOf(StoreError);
-    expect(st.snapshot()).toEqual(before);
   });
 
   test('remote notifies subscribers once with the mutated snapshot, and unsubscribe stops it', () => {
@@ -490,13 +395,11 @@ describe('fake store', () => {
     await st.renameLevel('f-ease', 0, 'Tough');
     await st.removeParameter('f-ease');
     await st.linkParameter('f-ease', 'last');
-    await st.reorderLists([], () => {});
-    await st.undoReorder(() => {});
     st.failNext('openCard');
     await expect(st.openCard('c1')).rejects.toBeInstanceOf(StoreError);
     expect(st.calls.map(c => c.method)).toEqual([
       'createParameter', 'renameParameter', 'renameLevel', 'removeParameter', 'linkParameter',
-      'reorderLists', 'undoReorder', 'openCard',
+      'openCard',
     ]);
   });
 });

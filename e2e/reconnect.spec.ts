@@ -119,35 +119,6 @@ test('the parameter dialog: a refused change shows its error and the bar, which 
   expect(await store(page, s => s.calls.filter(c => c.method === 'createParameter').length)).toBe(1);   // not retried
 });
 
-test('the resequence drawer: a refused reorder shows "Stopped after" and the bar, which can be pressed while the drawer is open', async ({ page }) => {
-  await page.goto('dev.html');
-  await page.getByTestId('resequence').click();
-  const d = page.getByTestId('reseq-drawer');
-  await expireOn(page, 'reorderLists');
-  await d.getByRole('button', { name: 'Reorder in Trello' }).click();
-  await expect(d).toContainText('Stopped');
-  await expect(d).toContainText('Trello sign-in has expired. Connect again.');
-  await expect(bar(page)).toBeVisible();
-  await connectButton(page).click();
-  await expect(bar(page)).toBeHidden();
-  expect(await connectCalls(page)).toBe(1);
-  await expect(d).toBeVisible();
-  expect(await store(page, s => s.calls.filter(c => c.method === 'reorderLists').length)).toBe(1);   // not retried
-});
-
-test('the resequence drawer: a refused undo shows the bar too', async ({ page }) => {
-  await page.goto('dev.html');
-  await page.getByTestId('resequence').click();
-  const d = page.getByTestId('reseq-drawer');
-  await d.getByRole('button', { name: 'Reorder in Trello' }).click();
-  await expect(d).toBeHidden();
-  await page.getByTestId('resequence').click();
-  await expireOn(page, 'undoReorder');
-  await d.getByRole('button', { name: 'Undo last reorder' }).click();
-  await expect(d).toContainText('Stopped');
-  await expect(bar(page)).toBeVisible();
-});
-
 test('the Connect button comes back 5 seconds after a press that never settles', async ({ page }) => {
   await page.goto('dev.html');
   await expireOn(page, 'savePositions');

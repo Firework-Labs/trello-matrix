@@ -10,10 +10,8 @@ export interface ToolbarModel {
   listIds: string[];
   colourBy: ColourBy;
   showImages: boolean;
-  /** False for a person who cannot change the board: they do not see the parameters or resequence buttons. */
+  /** False for a person who cannot change the board: they do not see the parameters button. */
   canEdit: boolean;
-  /** False when there is nothing to plot, so there is nothing to put in a new order. */
-  canResequence: boolean;
 }
 
 export interface ToolbarHandlers {
@@ -24,7 +22,6 @@ export interface ToolbarHandlers {
   onColourBy(by: ColourBy): void;
   onShowImages(show: boolean): void;
   onParams(): void;
-  onResequence(): void;
   onWholeMatrix(): void;
 }
 
@@ -34,8 +31,6 @@ export interface Toolbar {
   setZoomText(text: string): void;
   /** Puts the keyboard focus on the parameters button (where it returns when the dialog closes). */
   focusParams(): void;
-  /** Puts the keyboard focus on the resequence button (where it returns when the drawer closes). */
-  focusResequence(): void;
 }
 
 const NO_CHOICE = '';
@@ -107,7 +102,6 @@ export function createToolbar(handlers: ToolbarHandlers, signal: AbortSignal): T
   showImagesLabel.append(showImages, 'Show images');
 
   const params = button('Parameters…', 'params');
-  const resequence = button('Resequence lists…', 'resequence');
 
   const spacer = el('span', 'mm-spacer');
   const zoomLabel = el('span', 'mm-zoom-label');
@@ -116,7 +110,7 @@ export function createToolbar(handlers: ToolbarHandlers, signal: AbortSignal): T
 
   bar.append(
     labelled('Across', across), swap, labelled('Up', up), listsWrap, labelled('Colour by', colourBy),
-    showImagesLabel, params, resequence, spacer, zoomLabel, whole,
+    showImagesLabel, params, spacer, zoomLabel, whole,
   );
 
   // ---- the lists checklist: a popover that closes on a press outside it (never on a key) ----
@@ -181,7 +175,6 @@ export function createToolbar(handlers: ToolbarHandlers, signal: AbortSignal): T
   colourBy.addEventListener('change', () => handlers.onColourBy(decodeColour(colourBy.value)), { signal });
   showImages.addEventListener('change', () => handlers.onShowImages(showImages.checked), { signal });
   params.addEventListener('click', () => handlers.onParams(), { signal });
-  resequence.addEventListener('click', () => handlers.onResequence(), { signal });
   whole.addEventListener('click', () => handlers.onWholeMatrix(), { signal });
 
   function update(model: ToolbarModel): void {
@@ -195,10 +188,8 @@ export function createToolbar(handlers: ToolbarHandlers, signal: AbortSignal): T
     ]);
     colourBy.value = encodeColour(model.colourBy);
     showImages.checked = model.showImages;
-    resequence.disabled = !model.canResequence;
     params.hidden = !model.canEdit;
-    resequence.hidden = !model.canEdit;
   }
 
-  return { el: bar, update, setZoomText(text) { zoomLabel.textContent = text; }, focusParams() { params.focus(); }, focusResequence() { resequence.focus(); } };
+  return { el: bar, update, setZoomText(text) { zoomLabel.textContent = text; }, focusParams() { params.focus(); } };
 }

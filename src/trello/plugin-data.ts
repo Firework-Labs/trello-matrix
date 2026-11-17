@@ -5,13 +5,12 @@ import { clampPosition } from '../model/placement';
 import type { ColourBy, DropdownField, Parameter, ViewSettings } from '../model/types';
 import { StoreError } from '../store/board-store';
 
-export const KEY_PARAMS = 'params', KEY_CARD = 'mx', KEY_VIEW = 'view', KEY_REORDER = 'reorder';
+export const KEY_PARAMS = 'params', KEY_CARD = 'mx', KEY_VIEW = 'view';
 
 /** A parameter as stored: the Custom Field's id and its option ids, worst to best. */
 export interface StoredParam { f: string; o: string[] }
-/** A card's stored data: positions by parameter id; its list position before the last reorder; that reorder's id. */
-export interface StoredCard { p?: Record<string, number>; prev?: number; gen?: string }
-export interface StoredReorder { gen: string; complete: boolean }
+/** A card's stored data: positions by parameter id. Older values also carry `prev` and `gen`; they are ignored. */
+export interface StoredCard { p?: Record<string, number> }
 
 const STORAGE_LIMIT = 4096;
 
@@ -44,8 +43,6 @@ export function decodeCard(raw: unknown): StoredCard {
     }
     if (Object.keys(p).length > 0) out.p = p;
   }
-  if (isFiniteNumber(raw.prev)) out.prev = raw.prev;
-  if (isString(raw.gen)) out.gen = raw.gen;
   return out;
 }
 
@@ -59,14 +56,7 @@ export function encodeCard(c: StoredCard): StoredCard | null {
     }
     if (Object.keys(p).length > 0) out.p = p;
   }
-  if (isFiniteNumber(c.prev)) out.prev = c.prev;
-  if (isString(c.gen)) out.gen = c.gen;
   return Object.keys(out).length > 0 ? out : null;
-}
-
-export function decodeReorder(raw: unknown): StoredReorder | null {
-  if (!isRecord(raw) || !isString(raw.gen) || typeof raw.complete !== 'boolean') return null;
-  return { gen: raw.gen, complete: raw.complete };
 }
 
 function decodeColourBy(raw: unknown): ColourBy | null {

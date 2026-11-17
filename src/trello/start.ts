@@ -16,7 +16,6 @@ export interface StartDeps {
   sleep: (ms: number) => Promise<void>;
   setTimeout: (fn: () => void, ms: number) => unknown;
   clearTimeout: (handle: unknown) => void;
-  newId: () => string;
   /** Whether the page can be seen (the store's steady read pauses while it cannot). Default: always. */
   isVisible?: () => boolean;
 }
@@ -33,7 +32,7 @@ export async function startMatrix(deps: StartDeps): Promise<{ destroy(): void }>
     auth, fetch: deps.fetch, pacer, sleep: deps.sleep, setTimeout: deps.setTimeout, clearTimeout: deps.clearTimeout,
   });
   const store = createTrelloStore({
-    t, rest, auth, newId: deps.newId, now: deps.now, setTimeout: deps.setTimeout, clearTimeout: deps.clearTimeout,
+    t, rest, auth, now: deps.now, setTimeout: deps.setTimeout, clearTimeout: deps.clearTimeout,
     ...(deps.isVisible ? { isVisible: deps.isVisible } : {}),
   });
   const focus: unknown = t.arg('focusCardId');
@@ -53,7 +52,6 @@ export interface BootEnv {
     TrelloPowerUp?: StartDeps['powerUp'] | null;   // missing when Trello's library did not load
     fetch: typeof fetch;
     performance: { now(): number };
-    crypto: { randomUUID(): string };
     setTimeout(fn: () => void, ms: number): unknown;
     clearTimeout(handle: unknown): void;
   };
@@ -82,7 +80,6 @@ export async function bootMatrix(env: BootEnv): Promise<void> {
       sleep: ms => new Promise<void>(resolve => { w.setTimeout(resolve, ms); }),
       setTimeout: (fn, ms) => w.setTimeout(fn, ms),
       clearTimeout: handle => { w.clearTimeout(handle); },
-      newId: () => w.crypto.randomUUID(),
       isVisible: () => env.document.visibilityState !== 'hidden',
     });
   } catch {

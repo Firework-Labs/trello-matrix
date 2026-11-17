@@ -1,8 +1,6 @@
 import type { BoardSnapshot, Parameter, ParamId, ViewSettings } from '../model/types';
 
-export interface Progress { done: number; total: number }
 export interface NewParameter { name: string; levels: string[]; bestEnd: 'first' | 'last' }   // levels as typed, 2 or 3 names
-export interface ListOrder { listId: string; cardIds: string[] }
 export type StoreErrorKind = 'auth' | 'permission' | 'rate-limit' | 'limit' | 'network' | 'invalid';
 
 export class StoreError extends Error {
@@ -44,8 +42,6 @@ export interface BoardStore {
   renameParameter(id: ParamId, name: string): Promise<void>;
   renameLevel(id: ParamId, level: number, name: string): Promise<void>;
   removeParameter(id: ParamId): Promise<void>;                // forgets it; the field and its values stay
-  reorderLists(orders: ListOrder[], onProgress: (p: Progress) => void): Promise<void>;
-  undoReorder(onProgress: (p: Progress) => void): Promise<void>;
   openCard(cardId: string): Promise<void>;
   coverImageUrl(cardId: string): Promise<string | null>;
   loadView(): Promise<ViewSettings | null>;

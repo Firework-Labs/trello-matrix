@@ -1,4 +1,4 @@
-// The three REST calls the matrix makes, as proven by the live checks (docs/proof-results.md).
+// The REST calls the matrix makes, as proven by the live checks (docs/proof-results.md).
 // Everything it needs (fetch, sign-in, pacer, sleep) is passed in, so tests use fakes.
 // The token goes only in the Authorization header, is read when each request is sent, and is
 // never put in an address, a message or a log.
@@ -14,7 +14,6 @@ export interface Rest {
   createDropdownField(boardId: string, name: string, optionTexts: string[]): Promise<DropdownField>;
   /** Sets the card's value for a dropdown field, or clears it with null. */
   setFieldOption(cardId: string, fieldId: string, optionId: string | null): Promise<void>;
-  setCardPos(cardId: string, pos: number): Promise<void>;
 }
 
 const RATE_LIMIT_WAIT_MS = 10_000;
@@ -99,7 +98,7 @@ export function createRest(o: {
   const doFetch = o.fetch;   // called without a receiver: a browser's fetch throws "Illegal invocation" as a property of another object
 
   /** One HTTP request, paced. Nothing is sent when there is no token. */
-  function attempt(method: string, path: string, query: Record<string, string> | undefined, body: unknown): Promise<Answer> {
+  function attempt(method: string, path: string, body: unknown): Promise<Answer> {
     return o.pacer.run(async () => {
       // The 20 s cover the token read as well, so a token call that never answers cannot hold the pacer either.
       const controller = new AbortController();
@@ -113,7 +112,6 @@ export function createRest(o: {
         if (token === null) throw new StoreError('auth', 'Not signed in to Trello.');
         if (controller.signal.aborted) throw new StoreError('network', TIMED_OUT);   // the token came too late: send nothing
         const url = new URL(path, base);
-        for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
         const address = url.toString();
         const headers: Record<string, string> = authHeaders(address, token);
         if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -133,9 +131,9 @@ export function createRest(o: {
   }
 
   /** Sends the request, waiting and trying again when Trello says it is being asked too much. Resolves with the answer text. */
-  async function send(method: string, path: string, query?: Record<string, string>, body?: unknown): Promise<string> {
+  async function send(method: string, path: string, body?: unknown): Promise<string> {
     for (let retries = 0; ; retries++) {
-      const answer = await attempt(method, path, query, body);
+      const answer = await attempt(method, path, body);
       if (answer.ok) return answer.text;
       if (answer.status !== 429 || retries >= MAX_RETRIES) throw errorFor(answer);
       await o.sleep(RATE_LIMIT_WAIT_MS);
@@ -144,7 +142,7 @@ export function createRest(o: {
 
   return {
     async createDropdownField(boardId, name, optionTexts) {
-      const text = await send('POST', '/1/customFields', undefined, createFieldBody(boardId, name, optionTexts));
+      const text = await send('POST', '/1/customFields', createFieldBody(boardId, name, optionTexts));
       const answer = parseJson(text);
       const id = isRecord(answer) && typeof answer.id === 'string' && answer.id !== '' ? answer.id : null;
       if (id === null) throw new StoreError('network', OPTIONS_UNKNOWN);
@@ -163,13 +161,9 @@ export function createRest(o: {
 
     async setFieldOption(cardId, fieldId, optionId) {
       await send(
-        'PUT', `/1/cards/${encodeURIComponent(cardId)}/customField/${encodeURIComponent(fieldId)}/item`, undefined,
+        'PUT', `/1/cards/${encodeURIComponent(cardId)}/customField/${encodeURIComponent(fieldId)}/item`,
         optionId === null ? { idValue: '', value: '' } : { idValue: optionId },
       );
-    },
-
-    async setCardPos(cardId, pos) {
-      await send('PUT', `/1/cards/${encodeURIComponent(cardId)}`, { pos: String(pos) });
     },
   };
 }

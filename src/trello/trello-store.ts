@@ -1,5 +1,5 @@
-// The BoardStore on Trello: reads through the Power-Up client library, writes dropdown values and list positions
-// through REST, and keeps the matrix's own data in Trello's plugin storage. Everything it needs is passed in, so
+// The BoardStore on Trello: reads through the Power-Up client library, writes dropdown values through REST,
+// and keeps the matrix's own data in Trello's plugin storage. Everything it needs is passed in, so
 // tests use fakes. What a real board does is recorded in docs/proof-results.md.
 import { clampPosition } from '../model/placement';
 import type { BoardSnapshot, Card } from '../model/types';
@@ -10,10 +10,9 @@ import {
 import type { TrelloAuth } from './auth';
 import { createOverlay } from './overlay';
 import {
-  KEY_CARD, KEY_PARAMS, KEY_REORDER, KEY_VIEW, assertFits, decodeCard, decodeParams, decodeReorder, decodeView, encodeCard,
-  type StoredCard, type StoredParam, type StoredReorder,
+  KEY_CARD, KEY_PARAMS, KEY_VIEW, assertFits, decodeCard, decodeParams, decodeView, encodeCard,
+  type StoredCard, type StoredParam,
 } from './plugin-data';
-import { KEEP, createReorderer } from './reorder';
 import type { Rest } from './rest';
 import { coverUrls, toSnapshot, type RawBoardData } from './snapshot';
 
@@ -71,8 +70,6 @@ function idsOf(list: unknown): string[] {
 
 interface ReadResult {
   shown: BoardSnapshot;                     // the snapshot with our own recent writes laid over it
-  cardData: Record<string, unknown>;        // each card's stored value, by card id, as read
-  unreadable: Set<string>;                  // cards whose stored value could not be read (shown as having none)
   startedAt: number;                        // the write counter when the read began
 }
 
@@ -84,7 +81,6 @@ const LOAD_ATTEMPTS = 3;
 
 export function createTrelloStore(o: {
   t: TrelloIframe; rest: Rest; auth: TrelloAuth;
-  newId: () => string;                      // ids for reorders
   now: () => number;
   setTimeout: (fn: () => void, ms: number) => unknown;
   clearTimeout: (handle: unknown) => void;
@@ -155,27 +151,24 @@ export function createTrelloStore(o: {
     } catch { return false; }
   }
 
-  async function gather(): Promise<{ data: RawBoardData; unreadable: Set<string> }> {
-    const unreadable = new Set<string>();
+  async function gather(): Promise<RawBoardData> {
     try {
       const cards = call(() => t.cards('id', 'name', 'idList', 'pos', 'labels', 'members', 'cover', 'customFieldItems'));
       // A card whose own data cannot be read counts as having none; anything else failing fails the read.
       const cardEntries = cards.then(list => Promise.all(idsOf(list).map(id =>
         call(() => t.get(id, 'shared', KEY_CARD)).then(
           value => [id, value] as const,
-          () => { unreadable.add(id); return [id, undefined] as const; },
+          () => [id, undefined] as const,
         ))));
-      const [cardList, lists, board, params, reorder, entries] = await Promise.all([
+      const [cardList, lists, board, params, entries] = await Promise.all([
         cards,
         call(() => t.lists('id', 'name')),
         call(() => t.board('id', 'labels', 'customFields', 'members')),
         call(() => t.get('board', 'shared', KEY_PARAMS)),
-        call(() => t.get('board', 'shared', KEY_REORDER)),
         cardEntries,
       ]);
       // fromEntries makes own properties even for an id like `__proto__`.
-      const data = { cards: cardList, lists, board, cardData: Object.fromEntries(entries), params, reorder, canEdit: canEdit() };
-      return { data, unreadable };
+      return { cards: cardList, lists, board, cardData: Object.fromEntries(entries), params, canEdit: canEdit() };
     } catch {
       throw new StoreError('network', 'Could not read from Trello.');
     }
@@ -186,7 +179,7 @@ export function createTrelloStore(o: {
   function read(): Promise<ReadResult> {
     const run = async (): Promise<ReadResult> => {
       const startedAt = epoch;
-      const { data, unreadable } = await timed(gather());     // an answer that comes after the limit is dropped here: nothing below sees it
+      const data = await timed(gather());     // an answer that comes after the limit is dropped here: nothing below sees it
       const snapshot = toSnapshot(data);
       const params = decodeParams(data.params);
       const shown = overlay.apply(snapshot, params);
@@ -194,7 +187,7 @@ export function createTrelloStore(o: {
         base = snapshot; storedParams = params; covers = coverUrls(data.cards);
         if (isRecord(data.board) && isString(data.board.id) && data.board.id !== '') boardId = data.board.id;
       }
-      return { shown, cardData: data.cardData, unreadable, startedAt };
+      return { shown, startedAt };
     };
     const next = readChain.then(run);
     readChain = next.catch(() => undefined);
@@ -241,11 +234,9 @@ export function createTrelloStore(o: {
     await step(async () => { try { await timed(call(() => t.remove(scope, visibility, key))); } catch (e) { throw saveError(e); } });
   }
 
-  function updateCard(cardId: string, change: (stored: StoredCard) => StoredCard | null | typeof KEEP): Promise<void> {
+  function updateCard(cardId: string, change: (stored: StoredCard) => StoredCard): Promise<void> {
     return locked(`card:${cardId}`, async () => {
-      const next = change(decodeCard(await getKey(cardId, 'shared', KEY_CARD)));
-      if (next === KEEP) return;
-      const value = next === null ? null : encodeCard(next);
+      const value = encodeCard(change(decodeCard(await getKey(cardId, 'shared', KEY_CARD))));
       if (value === null) await removeKey(cardId, 'shared', KEY_CARD);
       else await setKey(cardId, 'shared', KEY_CARD, value);
     });
@@ -267,23 +258,6 @@ export function createTrelloStore(o: {
     } catch { /* falls through */ }
     throw new StoreError('network', 'Could not tell which board this is.');
   }
-
-  const reorderer = createReorderer({
-    fresh: async () => { const r = await read(); return { snapshot: r.shown, cardData: r.cardData, unreadable: r.unreadable }; },
-    getMarker: async () => decodeReorder(await getKey('board', 'shared', KEY_REORDER)),
-    putMarker: (marker: StoredReorder) => setKey('board', 'shared', KEY_REORDER, marker),
-    // Only the marker this undo started with: the other person may have started a reorder since.
-    dropMarker: async gen => {
-      const current = decodeReorder(await getKey('board', 'shared', KEY_REORDER));
-      if (current !== null && current.gen === gen) await removeKey('board', 'shared', KEY_REORDER);
-    },
-    updateCard,
-    moveCard: (cardId, pos, was) => step(async () => {
-      await call(() => rest.setCardPos(cardId, pos)).catch(e => { throw restError(e); });
-      overlay.noteCardPos(cardId, pos, was);
-    }),
-    newId: o.newId,
-  });
 
   // ------------------------------------------------------------ subscribing
 
@@ -382,7 +356,7 @@ export function createTrelloStore(o: {
           for (const [paramId, v] of Object.entries(positions)) {
             if (v === null) p.delete(paramId); else p.set(paramId, clampPosition(v));
           }
-          return { p: Object.fromEntries(p), prev: stored.prev, gen: stored.gen };
+          return { p: Object.fromEntries(p) };
         });
       });
     },
@@ -444,9 +418,6 @@ export function createTrelloStore(o: {
         await editParams(list => (list.some(e => e.f === param.fieldId) ? list.filter(e => e.f !== param.fieldId) : null));
       }));
     },
-
-    reorderLists: (orders, onProgress) => own(() => locked('reorder', () => reorderer.reorder(orders, onProgress))),
-    undoReorder: onProgress => own(() => locked('reorder', () => reorderer.undo(onProgress))),
 
     async openCard(cardId) {
       try { await t.showCard(cardId); } catch { throw new StoreError('network', 'Could not open the card.'); }

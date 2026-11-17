@@ -1,5 +1,4 @@
 import { clampPosition, levelOf } from '../model/placement';
-import { positionsFor } from '../model/resequence';
 import type { BoardSnapshot, Card, DropdownField, Label, List, Member, Parameter } from '../model/types';
 
 /**
@@ -164,6 +163,9 @@ function generate(count: number, random: () => number): Draft[] {
   return drafts;
 }
 
+/** Gap between consecutive Trello positions, as Trello leaves it. */
+const POSITION_STEP = 16384;
+
 export function sampleSnapshot(o: { cards?: number; seed?: number } = {}): BoardSnapshot {
   const total = Math.max(0, o.cards ?? 85);
   const fixed = fixtures().slice(0, total);
@@ -173,7 +175,7 @@ export function sampleSnapshot(o: { cards?: number; seed?: number } = {}): Board
   const posById = new Map<string, number>();
   for (const list of LISTS) {
     const ids = drafts.filter(d => d.card.idList === list.id).map(d => d.card.id);
-    for (const { cardId, pos } of positionsFor(ids)) posById.set(cardId, pos);
+    ids.forEach((id, i) => posById.set(id, (i + 1) * POSITION_STEP));
   }
 
   const placements: BoardSnapshot['placements'] = {};
@@ -189,6 +191,5 @@ export function sampleSnapshot(o: { cards?: number; seed?: number } = {}): Board
     parameters: structuredClone(PARAMETERS),
     placements,
     canEdit: true,
-    canUndoReorder: false,
   };
 }

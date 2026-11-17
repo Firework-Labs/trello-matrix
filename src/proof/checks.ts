@@ -845,7 +845,7 @@ interface RestPluginData { idPlugin?: string; value?: unknown }
 interface RestBoardCards { cards?: { id: string; pluginData?: RestPluginData[] }[] }
 
 // Poll mode builds its snapshot from one board read with the card data included, keeping only this Power-Up's entries
-// (those whose idPlugin is the context's plugin id). A reorder is also about 90 saves in a burst.
+// (those whose idPlugin is the context's plugin id).
 const p8 = check('P8', 'Hidden card data through REST, and a burst of saves', 'Press Run. It takes a few seconds.', false, async d => {
   const tok = await token(d);
   const board = await d.t.board('id');

@@ -11,7 +11,6 @@ const snap: BoardSnapshot = {
   parameters: [],
   placements: {},
   canEdit: true,
-  canUndoReorder: false,
 };
 const cardWith = (partial: Partial<Card>): Card =>
   ({ id: 'c', name: 'n', idList: 'l-todo', pos: 1, labelIds: [], memberIds: [], hasCover: false, fieldOptions: {}, ...partial });

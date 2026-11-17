@@ -1,7 +1,7 @@
 // Turns what the Power-Up client library returned into a BoardSnapshot. Everything read is untrusted: a value
 // of the wrong type counts as missing, nothing throws, and an entry without a string id is skipped.
 import type { BoardSnapshot, Card, DropdownField, Label, List, Member, Placement } from '../model/types';
-import { decodeCard, decodeParams, decodeReorder, joinParameters } from './plugin-data';
+import { decodeCard, decodeParams, joinParameters } from './plugin-data';
 
 /** Everything the store reads from the Power-Up client library for one snapshot. All of it is untrusted. */
 export interface RawBoardData {
@@ -10,7 +10,6 @@ export interface RawBoardData {
   board: unknown;                       // t.board('id','labels','customFields','members')
   cardData: Record<string, unknown>;    // by card id: the Power-Up's shared card storage value (key 'mx')
   params: unknown;                      // board shared storage value (key 'params')
-  reorder: unknown;                     // board shared storage value (key 'reorder')
   canEdit: boolean;
 }
 
@@ -128,6 +127,6 @@ export function toSnapshot(raw: RawBoardData): BoardSnapshot {
   return {
     lists, cards, labels, members, dropdownFields,
     parameters: joinParameters(decodeParams(raw.params), dropdownFields),
-    placements, canEdit: raw.canEdit === true, canUndoReorder: decodeReorder(raw.reorder) !== null,
+    placements, canEdit: raw.canEdit === true,
   };
 }

@@ -75,22 +75,10 @@ export function storeCalls(page: Page): Promise<string[]> {
   return store(page, s => s.calls.map(c => c.method));
 }
 
-/** The ids of a list's cards in the order Trello shows them (ascending position). */
-export function listOrder(page: Page, listId: string): Promise<string[]> {
-  return page.evaluate(id => (window as unknown as { __store: FakeStore }).__store.snapshot().cards
-    .filter(c => c.idList === id).sort((a, b) => a.pos - b.pos).map(c => c.id), listId);
-}
-
-/** Every card's list and position, by card id: to show that cards in other lists were not touched. */
-export function positions(page: Page): Promise<Record<string, { idList: string; pos: number }>> {
-  return page.evaluate(() => Object.fromEntries((window as unknown as { __store: FakeStore }).__store.snapshot().cards
-    .map(c => [c.id, { idList: c.idList, pos: c.pos }])));
-}
-
-const TOOLBAR_CONTROLS = ['across', 'swap', 'up', 'lists', 'colour-by', 'show-images', 'params', 'resequence', 'whole-matrix'];
+const TOOLBAR_CONTROLS = ['across', 'swap', 'up', 'lists', 'colour-by', 'show-images', 'params', 'whole-matrix'];
 
 /**
- * What a person can still reach behind an open dialog or drawer: the toolbar controls that take the keyboard focus,
+ * What a person can still reach behind an open dialog: the toolbar controls that take the keyboard focus,
  * and the page regions (toolbar, matrix area, legend) that sit inside an inert part of the page.
  */
 export function reachableBehind(page: Page): Promise<{ focusable: string[]; inert: string[] }> {

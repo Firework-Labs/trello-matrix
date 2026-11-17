@@ -40,7 +40,6 @@ function rawBoard(): RawBoardData {
     },
     cardData: { c1: { p: { f1: 0.9 } } },
     params: [{ f: 'f1', o: ['oLow', 'oMed', 'oHigh'] }],
-    reorder: null,
     canEdit: true,
   };
 }
@@ -60,7 +59,7 @@ describe('toSnapshot', () => {
     expect(s.cards[1]).toEqual({ id: 'c2', name: 'Two', idList: 'l2', pos: 200, labelIds: [], memberIds: [], hasCover: false, fieldOptions: {} });
     expect(s.placements).toEqual({ c1: { positions: { f1: 0.9 } } });
     expect(s.parameters).toEqual([{ id: 'f1', name: 'Value', levels: ['Low', 'Medium', 'High'], fieldId: 'f1', optionIds: ['oLow', 'oMed', 'oHigh'] }]);
-    expect(s.canEdit).toBe(true); expect(s.canUndoReorder).toBe(false);
+    expect(s.canEdit).toBe(true);
   });
 
   test('canEdit is passed through', () => {
@@ -145,19 +144,19 @@ describe('toSnapshot', () => {
   });
 
   test('junk never throws and is left out', () => {
-    expect(() => toSnapshot({ cards: 'x', lists: null, board: 7, cardData: {}, params: 'p', reorder: [], canEdit: false })).not.toThrow();
-    const s = toSnapshot({ cards: [null, 5, { name: 'no id' }, { id: 'c9', idList: 'l1', pos: 'NaN' }], lists: [{ id: 'l1' }, 'x'], board: { labels: [{}], members: [{ id: 'm2' }], customFields: 'nope' }, cardData: { c9: 'junk' }, params: [{ f: 'gone', o: ['a', 'b'] }], reorder: { gen: 5 }, canEdit: false });
+    expect(() => toSnapshot({ cards: 'x', lists: null, board: 7, cardData: {}, params: 'p', canEdit: false })).not.toThrow();
+    const s = toSnapshot({ cards: [null, 5, { name: 'no id' }, { id: 'c9', idList: 'l1', pos: 'NaN' }], lists: [{ id: 'l1' }, 'x'], board: { labels: [{}], members: [{ id: 'm2' }], customFields: 'nope' }, cardData: { c9: 'junk' }, params: [{ f: 'gone', o: ['a', 'b'] }], canEdit: false });
     expect(s.cards).toEqual([{ id: 'c9', name: '', idList: 'l1', pos: 0, labelIds: [], memberIds: [], hasCover: false, fieldOptions: {} }]);
     expect(s.lists).toEqual([{ id: 'l1', name: '' }]); expect(s.labels).toEqual([]); expect(s.members).toEqual([{ id: 'm2', fullName: '', initials: '?' }]);
-    expect(s.parameters).toEqual([]); expect(s.placements).toEqual({}); expect(s.canUndoReorder).toBe(false);
+    expect(s.parameters).toEqual([]); expect(s.placements).toEqual({});
   });
 
   test('junk of every kind in every place still gives a snapshot', () => {
     for (const junk of [null, undefined, 0, 'x', [], {}, true]) {
-      const raw = { cards: junk, lists: junk, board: junk, cardData: junk, params: junk, reorder: junk, canEdit: true } as unknown as RawBoardData;
+      const raw = { cards: junk, lists: junk, board: junk, cardData: junk, params: junk, canEdit: true } as unknown as RawBoardData;
       expect(() => toSnapshot(raw)).not.toThrow();
       const s = toSnapshot(raw);
-      expect(s).toMatchObject({ lists: [], cards: [], labels: [], members: [], dropdownFields: [], parameters: [], placements: {}, canEdit: true, canUndoReorder: false });
+      expect(s).toMatchObject({ lists: [], cards: [], labels: [], members: [], dropdownFields: [], parameters: [], placements: {}, canEdit: true });
     }
     const s = toSnapshot(withCards([
       { id: 'c1', idList: 'l1', name: 5, pos: Infinity, labels: 'x', members: [null, { fullName: 'no id' }], cover: 'x', customFieldItems: { a: 1 } },
@@ -176,7 +175,7 @@ describe('toSnapshot', () => {
     expect(s.labels).toEqual([{ id: 'l', name: '', colour: null }, { id: 'm', name: 'N', colour: null }, { id: 'n', name: '', colour: null }]);
   });
 
-  test('a position of exactly 0 is kept, and a card with no stored positions gets no placement', () => {
+  test('a position of exactly 0 is kept, and a card with no stored positions (one that carries only the old `prev` and `gen`) gets no placement', () => {
     const raw = { ...rawBoard(), cardData: { c1: { p: { f1: 0 } }, c2: { prev: 5, gen: 'g' } } };
     expect(toSnapshot(raw).placements).toEqual({ c1: { positions: { f1: 0 } } });
   });
@@ -184,11 +183,6 @@ describe('toSnapshot', () => {
   test('a stored parameter whose field is no longer a dropdown is dropped', () => {
     const raw = { ...rawBoard(), board: { ...(rawBoard().board as object), customFields: [{ id: 'f1', name: 'Value', type: 'text' }] } };
     expect(toSnapshot(raw).parameters).toEqual([]);
-  });
-
-  test('a reorder marker makes undo available', () => {
-    expect(toSnapshot({ ...rawBoard(), reorder: { gen: 'g1', complete: true } }).canUndoReorder).toBe(true);
-    expect(toSnapshot({ ...rawBoard(), reorder: { gen: 'g1', complete: false } }).canUndoReorder).toBe(true);
   });
 
   test('stored keys such as __proto__ and constructor cannot change behaviour', () => {

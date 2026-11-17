@@ -10,7 +10,6 @@ import { mountMatrix } from './view/app';
  * lists=id,id (the chosen lists), across=id and up=id (the axes), emptyDoing=1 (no cards in the Doing list),
  * params=N (only the first N parameters), renameLevels=0 (levels cannot be renamed), renameParams=0 (parameters cannot be renamed),
  * extraField=Name:A,B,C (a dropdown field with these options that is not a parameter),
- * reorderFailAfter=N (the first reorder stops after N cards with a network error; a retry goes through),
  * staleReads=N (after every write the next N reads return the board from before it, like a lagging cache),
  * focus=cardId ("Show on matrix": open zoomed to that card).
  */
@@ -47,12 +46,10 @@ if (extra?.length === 2 && extra[0]) {
   });
 }
 
-const failAfter = query.get('reorderFailAfter');
 const stale = Number(query.get('staleReads') ?? 0);
 const store = createFakeStore({
   snapshot, connected: query.get('connected') !== '0',
   ...(Number.isInteger(stale) && stale > 0 ? { staleReads: stale } : {}),
-  ...(failAfter !== null && failAfter !== '' && Number.isFinite(Number(failAfter)) ? { reorderFailAfter: Number(failAfter) } : {}),
 });
 window.__store = store;
 

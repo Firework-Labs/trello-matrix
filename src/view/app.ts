@@ -6,7 +6,6 @@ import { createReconnectBar } from './reconnect-bar';
 import { attachDrag } from './drag';
 import { createLegend } from './legend';
 import { createParameterDialog } from './parameter-dialog';
-import { createResequenceDrawer } from './resequence-drawer';
 import { shareUnchanged } from './snapshot-share';
 import { createSurface, type Surface, type SurfaceState } from './surface';
 import { createToolbar } from './toolbar';
@@ -182,8 +181,6 @@ function watchAuth(store: BoardStore, onAuth: () => void): BoardStore {
     renameParameter: watch((id, name) => store.renameParameter(id, name)),
     renameLevel: watch((id, level, name) => store.renameLevel(id, level, name)),
     removeParameter: watch(id => store.removeParameter(id)),
-    reorderLists: watch((orders, onProgress) => store.reorderLists(orders, onProgress)),
-    undoReorder: watch(onProgress => store.undoReorder(onProgress)),
     openCard: watch(cardId => store.openCard(cardId)),
     coverImageUrl: watch(cardId => store.coverImageUrl(cardId)),
     loadView: watch(() => store.loadView()),
@@ -205,7 +202,7 @@ async function mountBoard(root: HTMLElement, plainStore: BoardStore, opts: Matri
   const abort = new AbortController();
   const { signal } = abort;
 
-  // From here on, a call refused for sign-in (a drop's writes, the dialog's changes, the drawer's reorder, a reload) shows the bar.
+  // From here on, a call refused for sign-in (a drop's writes, the dialog's changes, a reload) shows the bar.
   const store = watchAuth(plainStore, () => { if (!signal.aborted) reconnect.show(); });
   const reconnect = createReconnectBar({
     connect: () => plainStore.connect(),
@@ -236,7 +233,6 @@ async function mountBoard(root: HTMLElement, plainStore: BoardStore, opts: Matri
     onColourBy(by) { choice.colourBy = by; choiceChanged(); },
     onShowImages(show) { choice.showImages = show; choiceChanged(); },
     onParams() { dialog.open(state.snapshot); },
-    onResequence() { openResequence(); },
     onWholeMatrix() { animateTo(WHOLE); },
   }, signal);
   const legend = createLegend();
@@ -250,13 +246,7 @@ async function mountBoard(root: HTMLElement, plainStore: BoardStore, opts: Matri
     onClosed() { toolbar.focusParams(); },
     signal,
   });
-  const drawer = createResequenceDrawer({
-    store,
-    onChanged: boardRead,
-    onClosed() { toolbar.focusResequence(); },
-    signal,
-  });
-  root.append(reconnect.el, toolbar.el, main, legend.el, dialog.el, drawer.el);
+  root.append(reconnect.el, toolbar.el, main, legend.el, dialog.el);
 
   const surface: Surface = createSurface(main, { coverImage: cardId => store.coverImageUrl(cardId) });
   const stage = surface.stage;
@@ -280,7 +270,7 @@ async function mountBoard(root: HTMLElement, plainStore: BoardStore, opts: Matri
   function syncToolbar(): void {
     toolbar.update({
       parameters: state.snapshot.parameters, lists: state.snapshot.lists, dropdownFields: state.snapshot.dropdownFields,
-      ...choice, canEdit: state.snapshot.canEdit, canResequence: typeof plot() !== 'string' && chosenLists().length > 0,
+      ...choice, canEdit: state.snapshot.canEdit,
     });
   }
 
@@ -398,7 +388,7 @@ async function mountBoard(root: HTMLElement, plainStore: BoardStore, opts: Matri
     return axesChanged;
   }
 
-  /** The board was read again after the parameter dialog or the resequence drawer wrote it: new axes start from the whole matrix. */
+  /** The board was read again after the parameter dialog wrote it: new axes start from the whole matrix. */
   function boardRead(next: BoardSnapshot): void {
     if (adopt(shareUnchanged(state.snapshot, next))) animateTo(WHOLE);
     else renderNow();
@@ -415,13 +405,6 @@ async function mountBoard(root: HTMLElement, plainStore: BoardStore, opts: Matri
     adopt(shared);
     renderNow();
     dialog.boardChanged(state.snapshot);
-  }
-
-  function openResequence(): void {
-    if (!state.snapshot.canEdit || choice.across === null || choice.up === null || typeof plot() === 'string') return;
-    const listIds = chosenLists();
-    if (listIds.length === 0) return;                // only a list added for one card is plotted: there is nothing of the person's to reorder
-    drawer.open({ snapshot: state.snapshot, across: choice.across, up: choice.up, listIds });
   }
 
   stage.addEventListener('wheel', ev => {

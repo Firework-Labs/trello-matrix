@@ -1,5 +1,5 @@
 /**
- * Keeps a dialog or drawer modal for the keyboard as well as the pointer. While it is locked, everything else in the
+ * Keeps a dialog modal for the keyboard as well as the pointer. While it is locked, everything else in the
  * page it sits in (the toolbar, the matrix, the tray, the legend) is `inert`: it cannot be focused, tabbed to or clicked.
  * Unlocking gives back exactly what was locked. An element marked `data-modal-exempt` (the reconnect bar) stays live.
  */

@@ -6,7 +6,6 @@ const VIEW_KEY = 'trello-matrix-dev-view';       // where the dev page keeps the
 test('first use: no lists chosen shows a hint, choosing lists shows cards', async ({ page }) => {
   await page.goto('dev.html?fresh=1');                       // fresh=1: no saved view
   await expect(page.getByTestId('empty-hint')).toHaveText('Choose the lists to plot.');
-  await expect(page.getByTestId('resequence')).toBeDisabled();
   await expect(page.locator('[data-card-id]')).toHaveCount(0);
   await expect(page.getByTestId('across')).toHaveValue('f-value');          // the first two parameters
   await expect(page.getByTestId('up')).toHaveValue('f-cost');
@@ -15,18 +14,15 @@ test('first use: no lists chosen shows a hint, choosing lists shows cards', asyn
   await page.getByTestId('lists').click(); await page.getByLabel('Backlog').check();
   await expect(page.locator('[data-card-id="c1"]')).toBeVisible();
   await expect(page.getByTestId('empty-hint')).toBeHidden();
-  await expect(page.getByTestId('resequence')).toBeEnabled();
   await expect(page.locator('[data-card-id]')).toHaveCount(await store(page, s => s.snapshot().cards.filter(c => c.idList === 'l-backlog').length));
 });
 
 test('an empty chosen list and fewer than two parameters show hints', async ({ page }) => {
   await page.goto('dev.html?fresh=1&lists=l-doing&emptyDoing=1');
   await expect(page.getByTestId('empty-hint')).toHaveText('No cards in the chosen lists.');
-  await expect(page.getByTestId('resequence')).toBeDisabled();
   await expect(page.getByTestId('lists')).toBeEnabled();                   // the toolbar stays usable
   await page.goto('dev.html?params=1');
   await expect(page.getByTestId('empty-hint')).toHaveText('Add at least two parameters to plot cards.');
-  await expect(page.getByTestId('resequence')).toBeDisabled();
   await expect(page.getByTestId('swap')).toBeDisabled();
 });
 
@@ -123,11 +119,9 @@ test('Show images only controls the cover block on a full card', async ({ page }
   await expect(c1.locator('.mm-cover')).toHaveCount(1);
 });
 
-test('Parameters and Resequence lists buttons are in the toolbar', async ({ page }) => {
+test('The Parameters button is in the toolbar', async ({ page }) => {
   await page.goto('dev.html');
   await expect(page.getByTestId('params')).toHaveText('Parameters…');
-  await expect(page.getByTestId('resequence')).toHaveText('Resequence lists…');
-  await expect(page.getByTestId('resequence')).toBeEnabled();
 });
 
 test('the view is restored on reload, per person', async ({ page }) => {

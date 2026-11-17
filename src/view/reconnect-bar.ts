@@ -2,7 +2,7 @@ import { DECLINED_TEXT, wireConnectButton } from './connect-screen';
 
 /**
  * The bar across the top of the matrix that appears when Trello says the sign-in has expired. It is one element however
- * many calls fail. The page behind a dialog or the drawer is made inert, but this bar is exempt (`data-modal-exempt`),
+ * many calls fail. The page behind a dialog is made inert, but this bar is exempt (`data-modal-exempt`),
  * and the dialog layers start below it, so the person can always press Connect.
  */
 export interface ReconnectBar {

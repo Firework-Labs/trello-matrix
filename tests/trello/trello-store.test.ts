@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { BoardSnapshot, DropdownField, Parameter, ViewSettings } from '../../src/model/types';
-import { StoreError, type BoardStore, type Progress } from '../../src/store/board-store';
+import { StoreError, type BoardStore } from '../../src/store/board-store';
 import type { TrelloAuth } from '../../src/trello/auth';
-import { KEY_CARD, KEY_PARAMS, KEY_REORDER, KEY_VIEW } from '../../src/trello/plugin-data';
+import { KEY_CARD, KEY_PARAMS, KEY_VIEW } from '../../src/trello/plugin-data';
 import type { Rest } from '../../src/trello/rest';
 import { POLL_MS, createTrelloStore } from '../../src/trello/trello-store';
 
@@ -37,13 +37,11 @@ interface World {
   shown: string[];
   cardsCalls: number;
   clock: number;
-  newIds: number;
 }
 
 const dkey = (scope: string, vis: string, key: string) => `${scope}|${vis}|${key}`;
 const put = (w: World, scope: string, vis: Vis, key: string, value: unknown) => { w.data.set(dkey(scope, vis, key), structuredClone(value)); };
 const read = (w: World, scope: string, vis: Vis, key: string) => w.data.get(dkey(scope, vis, key));
-const marker = (w: World) => read(w, 'board', 'shared', KEY_REORDER);
 const storedParams = (w: World) => read(w, 'board', 'shared', KEY_PARAMS);
 const cardValue = (w: World, id: string) => read(w, id, 'shared', KEY_CARD);
 const raw = (w: World, id: string) => w.cards.find(c => c.id === id)!;
@@ -69,7 +67,7 @@ function newWorld(): World {
     },
     permissions: { board: 'write' },
     cardsImpl: null, failGet: () => null, failSet: () => null, setGate: null, hangSet: null, hangGet: null,
-    ops: [], log: [], renderFns: [], shown: [], cardsCalls: 0, clock: 1_000_000, newIds: 0,
+    ops: [], log: [], renderFns: [], shown: [], cardsCalls: 0, clock: 1_000_000,
   };
   put(w, 'board', 'shared', KEY_PARAMS, [{ f: 'f1', o: ['oLow', 'oMed', 'oHigh'] }]);
   put(w, 'c1', 'shared', KEY_CARD, { p: { f1: 0.9 } });
@@ -122,13 +120,12 @@ interface RestControl {
   calls: { method: string; args: unknown[] }[];
   failOn: Map<number, StoreError>;           // the Nth call (1 is the first, any method) rejects
   gate: Promise<void> | null;                // every call waits for this first
-  applyPos: boolean;                         // Trello applies setCardPos to the cards t.cards shows (default true)
   onCall: ((n: number) => void) | null;      // runs as each call arrives (n counts from 1), to change the world mid-operation
 }
 /** A REST client that records its calls. setFieldOption changes nothing in `w` (Trello's own data lags); the test moves it. */
 function makeRest(w: World): Rest & RestControl {
   let fields = 0;
-  const ctl: RestControl = { calls: [], failOn: new Map(), gate: null, applyPos: true, onCall: null };
+  const ctl: RestControl = { calls: [], failOn: new Map(), gate: null, onCall: null };
   const enter = async (method: string, args: unknown[]) => {
     ctl.calls.push({ method, args });
     w.log.push(`rest ${method} ${args.slice(0, 3).join(' ')}`);
@@ -145,10 +142,6 @@ function makeRest(w: World): Rest & RestControl {
     },
     async setFieldOption(cardId: string, fieldId: string, optionId: string | null) {
       await enter('setFieldOption', [cardId, fieldId, optionId]);
-    },
-    async setCardPos(cardId: string, pos: number) {
-      await enter('setCardPos', [cardId, pos]);
-      if (ctl.applyPos) raw(w, cardId).pos = pos;
     },
   });
 }
@@ -169,10 +162,8 @@ function setup(opts: { isVisible?: () => boolean } = {}) {
   const t = makeT(w);
   const rest = makeRest(w);
   const auth = makeAuth();
-  let n = 0;
   const st: BoardStore = createTrelloStore({
     t, rest, auth,
-    newId: () => { w.newIds++; return `gen-${++n}`; },
     now: () => w.clock,
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: h => clearTimeout(h as ReturnType<typeof setTimeout>),
@@ -209,7 +200,6 @@ describe('load', () => {
     expect(cardIn(s, 'c1')).toMatchObject({ idList: 'l1', pos: 100, labelIds: ['lab1'], memberIds: ['m1'], hasCover: true, fieldOptions: { f1: 'oMed' } });
     expect(s.placements).toEqual({ c1: { positions: { f1: 0.9 } } });
     expect(s.canEdit).toBe(true);
-    expect(s.canUndoReorder).toBe(false);
     expect(w.ops).toEqual([]);
   });
 
@@ -219,12 +209,6 @@ describe('load', () => {
       w.permissions = permissions;
       expect((await st.load()).canEdit).toBe(expected);
     }
-  });
-
-  test('canUndoReorder is true while a reorder marker is stored', async () => {
-    const { w, st } = setup();
-    put(w, 'board', 'shared', KEY_REORDER, { gen: 'g', complete: true });
-    expect((await st.load()).canUndoReorder).toBe(true);
   });
 
   test('returns a copy: changing it does not change what the next load returns', async () => {
@@ -283,15 +267,15 @@ describe('load', () => {
     expect(s.placements).toEqual({ c2: { positions: { f1: 0.3 } } });
   });
 
-  test('a failed read of the card list, a list, the board, the parameters or the marker rejects with a network error', async () => {
+  test('a failed read of the card list, a list, the board, or the parameters rejects with a network error', async () => {
     {
       const { w, st } = setup();
       w.cardsImpl = () => Promise.reject(new Error('boom'));
       expect(await error(st.load())).toMatchObject({ kind: 'network' });
     }
-    for (const failing of [KEY_PARAMS, KEY_REORDER]) {
+    {
       const { w, st } = setup();
-      w.failGet = (_s, _v, key) => (key === failing ? new Error('boom') : null);
+      w.failGet = (_s, _v, key) => (key === KEY_PARAMS ? new Error('boom') : null);
       expect(await error(st.load())).toMatchObject({ kind: 'network' });
     }
     {
@@ -332,15 +316,6 @@ describe('own writes shown while Trello catches up', () => {
     expect(cardIn(await st.load(), 'c2').fieldOptions).toEqual({ f1: 'oLow' });
   });
 
-  test('a position set by a reorder is shown while t.cards still shows the old one', async () => {
-    const { w, rest, st } = setup();
-    rest.applyPos = false;
-    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
-    expect(raw(w, 'c3').pos).toBe(300);
-    const s = await st.load();
-    expect(s.cards.filter(c => c.idList === 'l1').map(c => [c.id, c.pos])).toEqual([['c1', 32768], ['c2', 49152], ['c3', 16384]]);
-  });
-
   test('a second setLevel on the same card is based on the first, even before Trello caught up', async () => {
     const { w, st } = setup();
     const param = paramNamed(await st.load(), 'f1');
@@ -355,13 +330,13 @@ describe('own writes shown while Trello catches up', () => {
 // ---------------------------------------------------------------- writing cards
 
 describe('savePositions', () => {
-  test('merges into the stored value, rounds and clamps, forgets null keys, and keeps prev and gen', async () => {
+  test('merges into the stored value, rounds and clamps, forgets null keys, and stores only positions', async () => {
     const { w, st } = setup();
-    put(w, 'c1', 'shared', KEY_CARD, { p: { f1: 0.9, f2: 0.2 }, prev: 5000, gen: 'g1' });
+    put(w, 'c1', 'shared', KEY_CARD, { p: { f1: 0.9, f2: 0.2 }, prev: 5000, gen: 'g1' });   // an older version also stored these two
     await st.load();
     await st.savePositions('c1', { f1: 0.4567, f2: null, f9: 1.5 });
-    expect(w.ops).toEqual([{ op: 'set', scope: 'c1', vis: 'shared', key: KEY_CARD, value: { p: { f1: 0.457, f9: 0.999 }, prev: 5000, gen: 'g1' } }]);
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.457, f9: 0.999 }, prev: 5000, gen: 'g1' });
+    expect(w.ops).toEqual([{ op: 'set', scope: 'c1', vis: 'shared', key: KEY_CARD, value: { p: { f1: 0.457, f9: 0.999 } } }]);
+    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.457, f9: 0.999 } });
   });
 
   test('reads the stored value fresh each time, so another person\'s keys are kept', async () => {
@@ -372,7 +347,7 @@ describe('savePositions', () => {
     expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.2, fOther: 0.1 } });
   });
 
-  test('removes the whole stored value when nothing is left, but keeps a value that still has prev and gen', async () => {
+  test('removes the whole stored value when no position is left, even one that still has the old prev and gen', async () => {
     const { w, st } = setup();
     await st.load();
     await st.savePositions('c1', { f1: null });
@@ -381,7 +356,7 @@ describe('savePositions', () => {
 
     put(w, 'c2', 'shared', KEY_CARD, { p: { f1: 0.5 }, prev: 7, gen: 'g' });
     await st.savePositions('c2', { f1: null });
-    expect(w.ops[1]).toEqual({ op: 'set', scope: 'c2', vis: 'shared', key: KEY_CARD, value: { prev: 7, gen: 'g' } });
+    expect(w.ops[1]).toEqual({ op: 'remove', scope: 'c2', vis: 'shared', key: KEY_CARD });
   });
 
   test('a position that is not a number rejects as invalid and writes nothing', async () => {
@@ -397,16 +372,6 @@ describe('savePositions', () => {
     await st.load();
     await Promise.all([st.savePositions('c2', { f1: 0.1 }), st.savePositions('c2', { f2: 0.2 })]);
     expect(cardValue(w, 'c2')).toEqual({ p: { f1: 0.1, f2: 0.2 } });
-  });
-
-  test('a save and a running reorder touching the same card at the same time both land on its stored value', async () => {
-    const { w, st } = setup();
-    await st.load();
-    const reorder = st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
-    const save = st.savePositions('c1', { f2: 0.4 });
-    await Promise.all([reorder, save]);
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9, f2: 0.4 }, prev: 100, gen: 'gen-1' });
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
   });
 
   test('a failed read of the stored value rejects with a network error and writes nothing', async () => {
@@ -734,255 +699,6 @@ describe('removeParameter', () => {
     expect(await error(st.removeParameter('f1'))).toMatchObject({ kind: 'invalid' });
   });
 });
-
-// ---------------------------------------------------------------- reordering
-
-describe('reorderLists', () => {
-  const l1 = (...ids: string[]) => [{ listId: 'l1', cardIds: ids }];
-
-  test('stores each previous position once with the reorder id, sets positions in order, reports progress, and completes the marker', async () => {
-    const { w, rest, st } = setup();
-    await st.load();
-    w.log.length = 0;
-    w.ops.length = 0;
-    const progress: Progress[] = [];
-    await st.reorderLists(
-      [{ listId: 'l1', cardIds: ['c3', 'c1', 'c4', 'c2'] }, { listId: 'l2', cardIds: ['c4'] }],
-      p => progress.push(p),
-    );   // c4 is not in l1: ignored there
-    expect(w.newIds).toBe(1);
-    expect(w.log).toEqual([
-      'set board reorder',
-      'set c3 mx', 'rest setCardPos c3 16384',
-      'set c1 mx', 'rest setCardPos c1 32768',
-      'set c2 mx', 'rest setCardPos c2 49152',
-      'set c4 mx', 'rest setCardPos c4 16384',
-      'set board reorder',
-    ]);
-    expect(w.ops[0]).toMatchObject({ key: KEY_REORDER, value: { gen: 'gen-1', complete: false } });
-    expect(cardValue(w, 'c3')).toEqual({ prev: 300, gen: 'gen-1' });
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 }, prev: 100, gen: 'gen-1' });   // p kept
-    expect(cardValue(w, 'c2')).toEqual({ prev: 200, gen: 'gen-1' });
-    expect(cardValue(w, 'c4')).toEqual({ prev: 100, gen: 'gen-1' });
-    expect(rest.calls.map(c => c.args)).toEqual([['c3', 16384], ['c1', 32768], ['c2', 49152], ['c4', 16384]]);
-    expect(progress).toEqual([{ done: 1, total: 4 }, { done: 2, total: 4 }, { done: 3, total: 4 }, { done: 4, total: 4 }]);
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
-    expect((await st.load()).canUndoReorder).toBe(true);
-  });
-
-  test('a card id that repeats is ordered once', async () => {
-    const { rest, st } = setup();
-    const progress: Progress[] = [];
-    await st.reorderLists(l1('c2', 'c2', 'c1'), p => progress.push(p));
-    expect(rest.calls.map(c => c.args)).toEqual([['c2', 16384], ['c1', 32768]]);
-    expect(progress.at(-1)).toEqual({ done: 2, total: 2 });
-  });
-
-  test('an unknown list is refused before anything is written', async () => {
-    const { w, rest, st } = setup();
-    await st.load();
-    expect(await error(st.reorderLists([...l1('c1'), { listId: 'gone', cardIds: ['c2'] }], () => {})))
-      .toMatchObject({ kind: 'invalid', message: 'That list is no longer on the board.' });
-    expect(await error(st.reorderLists([{ listId: 'constructor', cardIds: [] }], () => {}))).toMatchObject({ kind: 'invalid' });
-    noWrites(w, rest);
-    expect(w.newIds).toBe(0);
-  });
-
-  test('with no cards to order nothing is written and no progress is reported', async () => {
-    const { w, rest, st } = setup();
-    const progress: Progress[] = [];
-    await st.reorderLists(l1('nope', 'c4'), p => progress.push(p));
-    noWrites(w, rest);
-    expect(progress).toEqual([]);
-  });
-
-  test('a card already at its target position is not sent but still counts in the progress', async () => {
-    const { w, rest, st } = setup();
-    raw(w, 'c1').pos = 16384;
-    const progress: Progress[] = [];
-    await st.reorderLists(l1('c1', 'c2'), p => progress.push(p));
-    expect(rest.calls.map(c => c.args)).toEqual([['c2', 32768]]);
-    expect(progress).toEqual([{ done: 1, total: 2 }, { done: 2, total: 2 }]);
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 }, prev: 16384, gen: 'gen-1' });
-  });
-
-  test('a failure part-way rejects, leaves the marker incomplete and undo available; running it again reuses the id, keeps the saved positions and finishes', async () => {
-    const { w, rest, st } = setup();
-    rest.failOn.set(2, new StoreError('network', 'Trello answered 500.'));    // the second card's request
-    const first: Progress[] = [];
-    expect(await error(st.reorderLists(l1('c3', 'c1', 'c2'), p => first.push(p)))).toMatchObject({ kind: 'network', message: 'Trello answered 500.' });
-    expect(first).toEqual([{ done: 1, total: 3 }]);
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: false });
-    expect(cardValue(w, 'c3')).toEqual({ prev: 300, gen: 'gen-1' });
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 }, prev: 100, gen: 'gen-1' });   // stored before its request failed
-    expect(cardValue(w, 'c2')).toBeUndefined();
-    expect((await st.load()).canUndoReorder).toBe(true);
-    expect(raw(w, 'c3').pos).toBe(16384);
-
-    const second: Progress[] = [];
-    await st.reorderLists(l1('c3', 'c1', 'c2'), p => second.push(p));
-    expect(w.newIds).toBe(1);
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
-    expect(cardValue(w, 'c3')).toEqual({ prev: 300, gen: 'gen-1' });                     // not overwritten with 16384
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 }, prev: 100, gen: 'gen-1' });
-    expect(cardValue(w, 'c2')).toEqual({ prev: 200, gen: 'gen-1' });
-    expect(second).toEqual([{ done: 1, total: 3 }, { done: 2, total: 3 }, { done: 3, total: 3 }]);
-    const sent = rest.calls.map(c => c.args.join(':'));
-    expect(sent).toEqual(['c3:16384', 'c1:32768', 'c1:32768', 'c2:49152']);             // c3 once; c1 again only because its request failed
-  });
-
-  test('a retry sends nothing again for a card done before the failure, even while t.cards still shows its old position', async () => {
-    const { w, rest, st } = setup();
-    rest.applyPos = false;
-    rest.failOn.set(2, new StoreError('network', 'Trello answered 500.'));
-    await error(st.reorderLists(l1('c3', 'c1', 'c2'), () => {}));
-    await st.reorderLists(l1('c3', 'c1', 'c2'), () => {});
-    expect(rest.calls.map(c => c.args.join(':'))).toEqual(['c3:16384', 'c1:32768', 'c1:32768', 'c2:49152']);
-    expect(cardValue(w, 'c3')).toEqual({ prev: 300, gen: 'gen-1' });
-  });
-
-  test('a failure while storing a previous position stops the reorder and sends nothing for that card', async () => {
-    const { w, rest, st } = setup();
-    w.failSet = (scope, _v, key) => (scope === 'c1' && key === KEY_CARD ? new Error('Request failed') : null);
-    expect(await error(st.reorderLists(l1('c3', 'c1', 'c2'), () => {}))).toMatchObject({ kind: 'network', message: 'Could not save to Trello.' });
-    expect(rest.calls.map(c => c.args.join(':'))).toEqual(['c3:16384']);
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: false });
-  });
-
-  test('with the stored data of a card being ordered unreadable it rejects and writes nothing; other cards do not matter', async () => {
-    const { w, rest, st } = setup();
-    put(w, 'c2', 'shared', KEY_CARD, { p: { f1: 0.3 } });
-    await st.load();
-    w.failGet = (scope, _v, key) => (scope === 'c2' && key === KEY_CARD ? new Error('boom') : null);
-    const progress: Progress[] = [];
-    expect(await error(st.reorderLists(l1('c3', 'c1', 'c2'), p => progress.push(p))))
-      .toMatchObject({ kind: 'network', message: 'Some cards could not be read. Nothing was changed. Try again.' });
-    noWrites(w, rest);
-    expect(progress).toEqual([]);
-    expect(w.newIds).toBe(0);
-    expect(cardValue(w, 'c2')).toEqual({ p: { f1: 0.3 } });
-
-    await st.reorderLists(l1('c3', 'c1'), () => {});          // c2 is not being ordered: it is not in the way
-    expect(rest.calls.map(c => c.args)).toEqual([['c3', 16384], ['c1', 32768]]);
-  });
-
-  test('a new reorder after a completed one gets a new id and replaces the marker', async () => {
-    const { w, st } = setup();
-    await st.reorderLists(l1('c1', 'c2'), () => {});
-    await st.reorderLists(l1('c2', 'c1'), () => {});
-    expect(w.newIds).toBe(2);
-    expect(marker(w)).toEqual({ gen: 'gen-2', complete: true });
-    expect(cardValue(w, 'c2')).toEqual({ prev: 32768, gen: 'gen-2' });
-  });
-
-  test('a failure to store the marker stops before any card is touched', async () => {
-    const { w, rest, st } = setup();
-    w.failSet = (_s, _v, key) => (key === KEY_REORDER ? new Error('Request failed') : null);
-    expect(await error(st.reorderLists(l1('c1'), () => {}))).toMatchObject({ kind: 'network' });
-    expect(rest.calls).toEqual([]);
-    expect(w.ops).toEqual([]);
-  });
-});
-
-describe('undoReorder', () => {
-  test('restores only the cards of the current reorder, clears their prev and gen but keeps p, removes the marker and reports progress', async () => {
-    const { w, rest, st } = setup();
-    put(w, 'c4', 'shared', KEY_CARD, { prev: 7, gen: 'old' });                 // left by an older reorder
-    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
-    rest.calls.length = 0;
-    w.ops.length = 0;
-    const progress: Progress[] = [];
-    await st.undoReorder(p => progress.push(p));
-    expect(rest.calls.map(c => c.args)).toEqual([['c1', 100], ['c2', 200], ['c3', 300]]);
-    expect(progress).toEqual([{ done: 1, total: 3 }, { done: 2, total: 3 }, { done: 3, total: 3 }]);
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 } });
-    expect(cardValue(w, 'c2')).toBeUndefined();
-    expect(cardValue(w, 'c3')).toBeUndefined();
-    expect(cardValue(w, 'c4')).toEqual({ prev: 7, gen: 'old' });
-    expect(marker(w)).toBeUndefined();
-    expect(w.ops.at(-1)).toEqual({ op: 'remove', scope: 'board', vis: 'shared', key: KEY_REORDER });
-    expect(['c1', 'c2', 'c3'].map(id => raw(w, id).pos)).toEqual([100, 200, 300]);
-    expect((await st.load()).canUndoReorder).toBe(false);
-  });
-
-  test('works after a reorder that stopped part-way, and skips a card that is already back at its position', async () => {
-    const { w, rest, st } = setup();
-    rest.failOn.set(2, new StoreError('network', 'Trello answered 500.'));
-    await error(st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {}));
-    rest.calls.length = 0;
-    const progress: Progress[] = [];
-    await st.undoReorder(p => progress.push(p));
-    // c3 moved, c1 did not move (its request failed) so it is already at 100, c2 was never reached and has no value stored.
-    expect(rest.calls.map(c => c.args)).toEqual([['c3', 300]]);
-    expect(progress).toEqual([{ done: 1, total: 2 }, { done: 2, total: 2 }]);
-    expect(marker(w)).toBeUndefined();
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 } });
-  });
-
-  test('with a reordered card\'s stored data unreadable it rejects before moving anything, keeps the marker, and a later undo restores every card', async () => {
-    const { w, rest, st } = setup();
-    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
-    rest.calls.length = 0;
-    w.ops.length = 0;
-    w.failGet = (scope, _v, key) => (scope === 'c2' && key === KEY_CARD ? new Error('boom') : null);
-    const progress: Progress[] = [];
-    expect(await error(st.undoReorder(p => progress.push(p))))
-      .toMatchObject({ kind: 'network', message: 'Some cards could not be read. Nothing was changed. Try again.' });
-    expect(rest.calls).toEqual([]);
-    expect(w.ops).toEqual([]);
-    expect(progress).toEqual([]);
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
-    expect(cardValue(w, 'c3')).toEqual({ prev: 300, gen: 'gen-1' });
-
-    w.failGet = () => null;
-    await st.undoReorder(() => {});
-    expect(['c1', 'c2', 'c3'].map(id => raw(w, id).pos)).toEqual([100, 200, 300]);
-    expect(marker(w)).toBeUndefined();
-  });
-
-  test('the marker is removed only if it is still the one this undo started with', async () => {
-    const { w, rest, st } = setup();
-    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
-    rest.calls.length = 0;
-    rest.onCall = n => { if (n === 1) put(w, 'board', 'shared', KEY_REORDER, { gen: 'newer', complete: false }); };   // the other person starts a reorder
-    await st.undoReorder(() => {});
-    expect(marker(w)).toEqual({ gen: 'newer', complete: false });
-    expect(w.ops.filter(op => op.op === 'remove' && op.key === KEY_REORDER)).toEqual([]);
-    expect(['c1', 'c2', 'c3'].map(id => raw(w, id).pos)).toEqual([100, 200, 300]);
-  });
-
-  test('a card whose stored value another reorder replaced meanwhile keeps that value', async () => {
-    const { w, rest, st } = setup();
-    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
-    rest.calls.length = 0;
-    rest.onCall = n => { if (n === 1) put(w, 'c3', 'shared', KEY_CARD, { prev: 1, gen: 'other' }); };
-    await st.undoReorder(() => {});
-    expect(cardValue(w, 'c3')).toEqual({ prev: 1, gen: 'other' });
-    expect(cardValue(w, 'c2')).toBeUndefined();
-  });
-
-  test('with no marker it rejects as invalid and does nothing', async () => {
-    const { w, rest, st } = setup();
-    expect(await error(st.undoReorder(() => {}))).toMatchObject({ kind: 'invalid', message: 'There is no reorder to undo.' });
-    noWrites(w, rest);
-  });
-
-  test('a failure part-way leaves the marker and the unrestored cards\' data so it can be run again', async () => {
-    const { w, rest, st } = setup();
-    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
-    rest.calls.length = 0;
-    rest.failOn.set(2, new StoreError('network', 'Trello answered 500.'));
-    await error(st.undoReorder(() => {}));
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
-    expect(cardValue(w, 'c1')).toEqual({ p: { f1: 0.9 } });
-    expect(cardValue(w, 'c2')).toEqual({ prev: 200, gen: 'gen-1' });
-    await st.undoReorder(() => {});
-    expect(['c1', 'c2', 'c3'].map(id => raw(w, id).pos)).toEqual([100, 200, 300]);
-    expect(marker(w)).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------- subscribing
 
 describe('subscribe', () => {
   test('subscribing by itself causes one read and one delivery after 200 ms', async () => {
@@ -1624,37 +1340,5 @@ describe('timeouts', () => {
     w.hangSet = (scope, key) => scope === 'board' && key === KEY_VIEW;
     const failed = error(st.saveView({ across: null, up: null, listIds: [], colourBy: { kind: 'label' }, showImages: true, zoom: 1, panX: 0, panY: 0 } as ViewSettings));
     expect(await givesUpAfter(failed, 20_000)).toMatchObject({ kind: 'network', message: MESSAGE });
-  });
-
-  test('a card step of a reorder that never answers stops it after 20 seconds with the marker incomplete, and running it again finishes', async () => {
-    const { w, rest, st } = setup();
-    await st.load();
-    w.hangSet = (scope, key) => scope === 'c1' && key === KEY_CARD;       // the second card's stored value
-    const progress: Progress[] = [];
-    const running = error(st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], p => progress.push(p)));
-    expect(await givesUpAfter(running, 20_000)).toMatchObject({ kind: 'network', message: MESSAGE });
-    expect(progress).toEqual([{ done: 1, total: 3 }]);
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: false });
-    expect((await st.load()).canUndoReorder).toBe(true);
-
-    w.hangSet = null;
-    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1', 'c2'] }], () => {});
-    expect(w.newIds).toBe(1);                         // the retry resumed the same reorder
-    expect(marker(w)).toEqual({ gen: 'gen-1', complete: true });
-    expect(cardValue(w, 'c3')).toEqual({ prev: 300, gen: 'gen-1' });     // not overwritten
-    expect(rest.calls.map(c => c.args.join(':'))).toEqual(['c3:16384', 'c1:32768', 'c2:49152']);
-  });
-
-  test('the marker write that never answers stops a reorder before any card is touched', async () => {
-    const { w, rest, st } = setup();
-    await st.load();
-    w.hangSet = (scope, key) => scope === 'board' && key === KEY_REORDER;
-    const running = error(st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1'] }], () => {}));
-    expect(await givesUpAfter(running, 20_000)).toMatchObject({ kind: 'network', message: MESSAGE });
-    expect(rest.calls).toEqual([]);
-    expect(w.ops).toEqual([]);
-    w.hangSet = null;
-    await st.reorderLists([{ listId: 'l1', cardIds: ['c3', 'c1'] }], () => {});       // the lock for reorders is free
-    expect(marker(w)).toEqual({ gen: 'gen-2', complete: true });                      // no marker was stored before, so this is a new reorder
   });
 });

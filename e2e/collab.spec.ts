@@ -177,31 +177,6 @@ test('choosing lists after a focus makes the choice the person own', async ({ pa
   await expect.poll(async () => (await savedView(page))?.listIds).toEqual(['l-backlog', 'l-doing']);
 });
 
-test('a list added only by "Show on matrix" is not part of a resequence: not previewed, never sent', async ({ page }) => {
-  await page.goto('dev.html');
-  const target = await store(page, s => s.snapshot().cards.find(c => c.idList === 'l-doing')!.id);
-  await page.goto(`dev.html?focus=${target}`);
-  await expect(page.getByTestId('lists')).toHaveText('Lists (3)…');                    // Doing is plotted for this session
-  await expect(card(page, target)).toBeVisible();
-  await page.getByTestId('resequence').click();
-  const drawer = page.getByTestId('reseq-drawer');
-  await expect(drawer.locator('h4')).toHaveText([/^Backlog \(\d+ cards\)$/, /^New Feature ideas \(\d+ cards\)$/]);
-  await expect(drawer).not.toContainText('Doing');
-  await drawer.getByRole('button', { name: 'Reorder in Trello' }).click();
-  await expect(page.getByTestId('toast')).toContainText('reordered.');
-  const sent = await store(page, s => s.calls.filter(c => c.method === 'reorderLists').flatMap(c => (c.args[0] as { listId: string }[]).map(o => o.listId)));
-  expect(sent.length).toBeGreaterThan(0);
-  expect(sent).not.toContain('l-doing');
-});
-
-test('with no list chosen but one added by "Show on matrix", there is nothing to resequence', async ({ page }) => {
-  await page.goto('dev.html');
-  const target = await store(page, s => s.snapshot().cards.find(c => c.idList === 'l-doing')!.id);
-  await page.goto(`dev.html?lists=&focus=${target}`);
-  await expect(card(page, target)).toBeVisible();
-  await expect(page.getByTestId('resequence')).toBeDisabled();
-});
-
 for (const [id, zone] of [['c3', 'tray'], ['c2', 'leftStrip']] as const) {
   test(`focus on a card in the ${zone} stays on the whole matrix and highlights it for a moment`, async ({ page }) => {
     await page.goto(`dev.html?focus=${id}`);
@@ -299,7 +274,6 @@ for (const method of ['isConnected', 'load', 'subscribe'] as const) {
 test('read-only: cards cannot be dragged, clicks still open cards, the view still works', async ({ page }) => {
   await page.goto('dev.html?readonly=1');
   await expect(page.getByTestId('params')).toBeHidden();
-  await expect(page.getByTestId('resequence')).toBeHidden();
   const before = await card(page, 'c1').boundingBox();
   await dragCardBy(page, 'c1', -200, 100);
   await nextFrames(page);
@@ -330,7 +304,6 @@ test('a board that becomes read-only stops accepting drops and hides the editing
   await expect(page.getByTestId('params')).toBeVisible();
   await store(page, s => s.remote(b => { b.canEdit = false; }));
   await expect(page.getByTestId('params')).toBeHidden();
-  await expect(page.getByTestId('resequence')).toBeHidden();
   const before = await card(page, 'c1').boundingBox();
   await dragCardBy(page, 'c1', -200, 100);
   await nextFrames(page);
@@ -538,29 +511,25 @@ test('a drop whose write fails after a snapshot arrived shows what the store hol
   await expect(card(page, 'c1')).toHaveAttribute('data-zone', 'matrix');
 });
 
-// ---- while a dialog or the drawer is open ----
+// ---- while a dialog is open ----
 
-for (const [name, button, closer] of [
-  ['parameter dialog', 'params', 'Done'], ['resequence drawer', 'resequence', 'Cancel'],
-] as const) {
-  test(`the matrix behind the open ${name} follows the other person's changes`, async ({ page }) => {
-    await page.goto('dev.html');
-    const before = (await card(page, 'c4').boundingBox())!;
-    const section = await sectionCount(page, '0-0');
-    await page.getByTestId(button).click();
-    await expect(page.getByRole('button', { name: closer })).toBeVisible();          // the modal is open ...
-    await store(page, s => s.remote(b => {
-      b.placements.c4!.positions['f-cost'] = 0.95;
-      b.cards.find(c => c.id === 'c4')!.fieldOptions['f-cost'] = 'k2';
-      b.cards.find(c => c.id === 'c1')!.name = 'Renamed behind the modal';
-    }));
-    await expect.poll(async () => (await card(page, 'c4').boundingBox())!.x).toBeGreaterThan(before.x + 300);   // ... and the card moved behind it
-    await expect(card(page, 'c1')).toHaveAttribute('aria-label', 'Renamed behind the modal');
-    expect(await sectionCount(page, '0-0')).toBe(section - 1);
-    await expect(page.getByRole('button', { name: closer })).toBeVisible();          // still open
-    expect(await storeCalls(page)).toEqual([]);
-  });
-}
+test("the matrix behind the open parameter dialog follows the other person's changes", async ({ page }) => {
+  await page.goto('dev.html');
+  const before = (await card(page, 'c4').boundingBox())!;
+  const section = await sectionCount(page, '0-0');
+  await page.getByTestId('params').click();
+  await expect(page.getByRole('button', { name: 'Done' })).toBeVisible();          // the modal is open ...
+  await store(page, s => s.remote(b => {
+    b.placements.c4!.positions['f-cost'] = 0.95;
+    b.cards.find(c => c.id === 'c4')!.fieldOptions['f-cost'] = 'k2';
+    b.cards.find(c => c.id === 'c1')!.name = 'Renamed behind the modal';
+  }));
+  await expect.poll(async () => (await card(page, 'c4').boundingBox())!.x).toBeGreaterThan(before.x + 300);   // ... and the card moved behind it
+  await expect(card(page, 'c1')).toHaveAttribute('aria-label', 'Renamed behind the modal');
+  expect(await sectionCount(page, '0-0')).toBe(section - 1);
+  await expect(page.getByRole('button', { name: 'Done' })).toBeVisible();          // still open
+  expect(await storeCalls(page)).toEqual([]);
+});
 
 // ---- a drop that the other person's change has made wrong ----
 

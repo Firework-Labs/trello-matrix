@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
-  assertFits, decodeCard, decodeParams, decodeReorder, decodeView, encodeCard, joinParameters,
-  KEY_CARD, KEY_PARAMS, KEY_REORDER, KEY_VIEW,
+  assertFits, decodeCard, decodeParams, decodeView, encodeCard, joinParameters,
+  KEY_CARD, KEY_PARAMS, KEY_VIEW,
 } from '../../src/trello/plugin-data';
 import type { DropdownField, ViewSettings } from '../../src/model/types';
 
@@ -16,7 +16,7 @@ const goodView: ViewSettings = {
 
 describe('keys', () => {
   test('the storage keys are the ones the store writes under', () => {
-    expect([KEY_PARAMS, KEY_CARD, KEY_VIEW, KEY_REORDER]).toEqual(['params', 'mx', 'view', 'reorder']);
+    expect([KEY_PARAMS, KEY_CARD, KEY_VIEW]).toEqual(['params', 'mx', 'view']);
   });
 });
 
@@ -24,8 +24,7 @@ describe('decodeCard', () => {
   test('drops anything that is not a position in range', () => {
     expect(decodeCard('junk')).toEqual({});
     expect(decodeCard(null)).toEqual({});
-    expect(decodeCard({ p: { a: 'x', b: 1.7, c: 0.5, d: -1, e: NaN }, prev: 'no' })).toEqual({ p: { c: 0.5 } });
-    expect(decodeCard({ p: { c: 0.5 }, prev: 1234.5, gen: 'g1' })).toEqual({ p: { c: 0.5 }, prev: 1234.5, gen: 'g1' });
+    expect(decodeCard({ p: { a: 'x', b: 1.7, c: 0.5, d: -1, e: NaN } })).toEqual({ p: { c: 0.5 } });
   });
   test('keeps the ends of the range that are valid: 0 is a position, 1 is not', () => {
     expect(decodeCard({ p: { a: 0, b: 0.999, c: 1 } })).toEqual({ p: { a: 0, b: 0.999 } });
@@ -37,10 +36,9 @@ describe('decodeCard', () => {
     expect(decodeCard({ p: 'x' })).toEqual({});
     expect(decodeCard([1, 2])).toEqual({});
   });
-  test('prev must be a finite number and gen a string', () => {
-    expect(decodeCard({ prev: Infinity, gen: 7 })).toEqual({});
-    expect(decodeCard({ prev: NaN })).toEqual({});
-    expect(decodeCard({ prev: null, gen: null })).toEqual({});
+  test('ignores the `prev` and `gen` that cards stored by an earlier version still carry', () => {
+    expect(decodeCard({ p: { c: 0.5 }, prev: 1234.5, gen: 'g1' })).toEqual({ p: { c: 0.5 } });
+    expect(decodeCard({ prev: 1234.5, gen: 'g1' })).toEqual({});
   });
   test('a stored __proto__ key cannot change the result', () => {
     const raw = JSON.parse('{"p":{"__proto__":0.5,"a":0.2}}');
@@ -54,18 +52,17 @@ describe('encodeCard', () => {
   test('rounds and returns null when empty', () => {
     expect(encodeCard({ p: { a: 0.123456 } })).toEqual({ p: { a: 0.123 } });
     expect(encodeCard({ p: {} })).toBeNull();
-    expect(encodeCard({ p: {}, prev: 5, gen: 'g' })).toEqual({ prev: 5, gen: 'g' });
   });
   test('clamps to the stored range and returns null for an empty card', () => {
     expect(encodeCard({ p: { a: 2, b: -3 } })).toEqual({ p: { a: 0.999, b: 0 } });
     expect(encodeCard({})).toBeNull();
   });
-  test('leaves out positions that are not numbers and a prev that is not finite', () => {
-    expect(encodeCard({ p: { a: NaN, b: 0.5 }, prev: NaN })).toEqual({ p: { b: 0.5 } });
+  test('leaves out positions that are not numbers', () => {
+    expect(encodeCard({ p: { a: NaN, b: 0.5 } })).toEqual({ p: { b: 0.5 } });
     expect(encodeCard({ p: { a: Infinity } })).toBeNull();
   });
   test('what encodeCard writes decodeCard reads back unchanged', () => {
-    const c = { p: { a: 0.25, b: 0.999 }, prev: 4096.5, gen: 'g9' };
+    const c = { p: { a: 0.25, b: 0.999 } };
     expect(decodeCard(encodeCard(c))).toEqual(c);
   });
 });
@@ -165,21 +162,6 @@ describe('decodeView', () => {
     const out = decodeView({ ...goodView, extra: 1, colourBy: { kind: 'list', junk: true } });
     expect(out).toEqual(goodView);
     expect(Object.keys(out!).sort()).toEqual(Object.keys(goodView).sort());
-  });
-});
-
-describe('decodeReorder', () => {
-  test('reads a well-formed record and rejects the rest', () => {
-    expect(decodeReorder({ gen: 'g', complete: false })).toEqual({ gen: 'g', complete: false });
-    expect(decodeReorder({ gen: 1 })).toBeNull();
-    expect(decodeReorder({ gen: 'g' })).toBeNull();
-    expect(decodeReorder({ gen: 'g', complete: 'no' })).toBeNull();
-    expect(decodeReorder({ complete: true })).toBeNull();
-    expect(decodeReorder(null)).toBeNull();
-    expect(decodeReorder('g')).toBeNull();
-  });
-  test('returns only gen and complete', () => {
-    expect(decodeReorder({ gen: 'g', complete: true, more: 1 })).toEqual({ gen: 'g', complete: true });
   });
 });
 

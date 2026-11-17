@@ -31,7 +31,6 @@ export function shareUnchanged(prev: BoardSnapshot, next: BoardSnapshot): BoardS
     parameters: keepItems(prev.parameters, next.parameters),
     placements: keepPlacements(prev.placements, next.placements),
     canEdit: next.canEdit,
-    canUndoReorder: next.canUndoReorder,
   };
   const unchanged = (Object.keys(merged) as (keyof BoardSnapshot)[]).every(key => merged[key] === prev[key]);
   return unchanged ? prev : merged;

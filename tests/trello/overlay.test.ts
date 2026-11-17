@@ -17,13 +17,13 @@ function deepFreeze<T>(v: T): T {
 const fieldF1: DropdownField = { id: 'f1', name: 'Value', options: [{ id: 'oLow', text: 'Low', colour: 'none' }, { id: 'oMed', text: 'Medium', colour: 'none' }, { id: 'oHigh', text: 'High', colour: 'none' }] };
 
 /** A frozen snapshot with one card per key of `cards` (card id → its dropdown values), so any write to it throws. */
-function snap(cards: Record<string, Record<string, string>>, fields: DropdownField[] = [], pos: Record<string, number> = {}): BoardSnapshot {
+function snap(cards: Record<string, Record<string, string>>, fields: DropdownField[] = []): BoardSnapshot {
   const list: Card[] = Object.entries(cards).map(([id, fieldOptions]) => ({
-    id, name: id, idList: 'l1', pos: pos[id] ?? 100, labelIds: [], memberIds: [], hasCover: false, fieldOptions,
+    id, name: id, idList: 'l1', pos: 100, labelIds: [], memberIds: [], hasCover: false, fieldOptions,
   }));
   return deepFreeze({
     lists: [{ id: 'l1', name: 'Backlog' }], cards: list, labels: [], members: [],
-    dropdownFields: fields, parameters: [], placements: {}, canEdit: true, canUndoReorder: false,
+    dropdownFields: fields, parameters: [], placements: {}, canEdit: true,
   });
 }
 
@@ -186,60 +186,6 @@ describe('dropdown values', () => {
   });
 });
 
-describe('list positions', () => {
-  test('follow the same three rules', () => {
-    t = 0;
-    const o = createOverlay({ now }); o.noteCardPos('c1', 500, 100);
-    const stale = snap({ c1: {} }, [], { c1: 100 });
-    const r = o.apply(stale);
-    expect(r.cards[0]!.pos).toBe(500); expect(stale.cards[0]!.pos).toBe(100); expect(o.pending()).toBe(1);
-    const caughtUp = snap({ c1: {} }, [], { c1: 500 });
-    expect(o.apply(caughtUp)).toBe(caughtUp); expect(o.pending()).toBe(0);
-    o.noteCardPos('c1', 500, 100);
-    const third = snap({ c1: {} }, [], { c1: 300 });
-    expect(o.apply(third)).toBe(third); expect(o.pending()).toBe(0);
-  });
-
-  test('a newer position note replaces the older one', () => {
-    const o = createOverlay({ now });
-    o.noteCardPos('c1', 200, 100); o.noteCardPos('c1', 300, 200);
-    expect(o.pending()).toBe(1);
-    expect(o.apply(snap({ c1: {} }, [], { c1: 100 })).cards[0]!.pos).toBe(300);
-    expect(o.apply(snap({ c1: {} }, [], { c1: 200 })).cards[0]!.pos).toBe(300);
-  });
-
-  test('a position set and then set back stays overlaid while reads show either, until a third value', () => {
-    t = 0;
-    const o = createOverlay({ now, ttlMs: 1000 });
-    o.noteCardPos('c1', 200, 100); o.noteCardPos('c1', 100, 200);   // 100 to 200, then back to 100
-    for (const shown of [100, 200, 100]) {
-      expect(o.apply(snap({ c1: {} }, [], { c1: shown })).cards[0]!.pos).toBe(100);
-      expect(o.pending()).toBe(1);
-    }
-    const theirs = snap({ c1: {} }, [], { c1: 300 });
-    expect(o.apply(theirs)).toBe(theirs); expect(o.pending()).toBe(0);
-    o.noteCardPos('c1', 200, 100); o.noteCardPos('c1', 100, 200);
-    advance(1001);
-    const late = snap({ c1: {} }, [], { c1: 200 });
-    expect(o.apply(late)).toBe(late); expect(o.pending()).toBe(0);
-  });
-
-  test('expire, and are forgotten for a card that is gone', () => {
-    t = 0;
-    const o = createOverlay({ now, ttlMs: 1000 }); o.noteCardPos('c1', 500, 100); o.noteCardPos('gone', 5, 4);
-    const s = snap({ c1: {} }, [], { c1: 100 });
-    expect(o.apply(s).cards[0]!.pos).toBe(500); expect(o.pending()).toBe(1);
-    advance(1001);
-    expect(o.apply(s)).toBe(s); expect(o.pending()).toBe(0);
-  });
-
-  test('a position and a value on the same card are both applied', () => {
-    const o = createOverlay({ now }); o.noteCardPos('c1', 500, 100); o.noteFieldOption('c1', 'f1', 'oHigh', 'oLow');
-    const r = o.apply(snap({ c1: { f1: 'oLow' } }, [], { c1: 100 }));
-    expect(r.cards[0]).toMatchObject({ pos: 500, fieldOptions: { f1: 'oHigh' } });
-  });
-});
-
 describe('created fields', () => {
   const field: DropdownField = { id: 'f9', name: 'Risk', options: [{ id: 'a', text: 'Low', colour: 'none' }, { id: 'b', text: 'High', colour: 'none' }] };
 
@@ -316,14 +262,14 @@ describe('parameters', () => {
 describe('several notes', () => {
   test('on different cards are all applied in one pass', () => {
     const o = createOverlay({ now });
-    o.noteFieldOption('c1', 'f1', 'oHigh', 'oLow'); o.noteFieldOption('c2', 'f1', null, 'oMed'); o.noteCardPos('c3', 900, 300);
-    const s = snap({ c1: { f1: 'oLow' }, c2: { f1: 'oMed' }, c3: { f1: 'oLow' }, c4: { f1: 'oLow' } }, [], { c3: 300 });
+    o.noteFieldOption('c1', 'f1', 'oHigh', 'oLow'); o.noteFieldOption('c2', 'f1', null, 'oMed');
+    const s = snap({ c1: { f1: 'oLow' }, c2: { f1: 'oMed' }, c3: { f1: 'oLow' }, c4: { f1: 'oLow' } });
     const r = o.apply(s);
     expect(r.cards[0]!.fieldOptions).toEqual({ f1: 'oHigh' });
     expect(r.cards[1]!.fieldOptions).toEqual({});
-    expect(r.cards[2]).toMatchObject({ pos: 900, fieldOptions: { f1: 'oLow' } });
+    expect(r.cards[2]).toBe(s.cards[2]);
     expect(r.cards[3]).toBe(s.cards[3]);   // untouched cards are the same objects
-    expect(o.pending()).toBe(3);
+    expect(o.pending()).toBe(2);
   });
 
   test('each is judged on its own: one caught up, one stale, one beaten by someone else', () => {
