@@ -54,6 +54,31 @@ this document, and they add one thing it did not cover:
   "Trello sign-in has expired.", with a **Connect to Trello** button. What
   failed is not repeated for the person; they connect and carry on.
 
+## Amendment 3, 2026-11-17: what acceptance decided
+
+Mike ran the acceptance checklist on the test board in Chrome and Safari
+([docs/acceptance.md](../../acceptance.md)). Decisions (Mike, 2026-11-17):
+
+- **Resequencing is removed (section 7.11, goal 9).** Mike does not need it.
+  The **Resequence lists…** button, its preview, **Reorder in Trello** and
+  **Undo last reorder** are gone, and the matrix no longer changes card
+  positions in Trello lists. Amendment 2's point on reorder and undo no longer
+  applies. Data a reorder already stored in Trello is left as it is and ignored.
+- **The matrix also reads the board every 3 seconds.** This replaces
+  Amendment 2's "no polling fallback". Trello's change notice did not reliably
+  arrive for a move made in another window or by another person: it showed
+  after about a minute, or only when a zoom caused a notice of its own. The
+  extra read goes through the Power-Up library (which can read hidden card
+  data), not Trello's web address, so it makes no web request and does not
+  count against Trello's request limit. It pauses while the page is hidden.
+- **Only people who can edit the board use the matrix.** A board observer
+  cannot add the Power-Up, and Mike does not need observers to use it. The
+  matrix still shows no editing controls to a person who cannot edit.
+- **The Parameters window follows the board.** It reads the board again after
+  a change Trello refused part way (a field made but not added), and while it
+  is open it shows fields made in Trello, so **Link** is offered without a
+  reload.
+
 ## 1. Intent
 
 Mike has 80–90 items in the backlog of the `67-Pass-Play-Teamwork` Trello board
@@ -315,6 +340,8 @@ reads this.
 - A legend at the bottom shows the colours in use. **(call)**
 
 ### 7.11 Resequencing lists
+
+**Removed on 2026-11-17 (Amendment 3).** Kept below as it was designed.
 
 - A "Resequence lists…" button opens a preview. Nothing changes in Trello
   until the user confirms. **(Mike: an option to resequence; call: preview and

@@ -12,6 +12,20 @@ order and spread over several sittings. Each check says what it needs to start
 from. If you stop half way, the next sitting starts with Setup line 1 (open the
 matrix) and carries on.
 
+## Re-run after the fixes of 2026-11-17
+
+All four rounds were run on 2026-11-17; the results are in the tables below.
+These lines are what is left. R1 and R2 need only you; R3 needs Person B.
+
+Retired: lines **11**, **19** and **S6** (the **Resequence lists** feature is
+removed) and line **18** (observers do not need the matrix).
+
+| No. | What to do | What you must see | Result |
+|-----|------------|-------------------|--------|
+| R1 | Reload the board, press **Matrix**, and look along the bar at the top of the matrix. Then press **Parameters…**, type a new name such as **Risk**, choose **2 levels**, and press **Add parameter**. | There is no **Resequence lists…** button. Risk appears as a row with no reload. If instead a message says the field was made but not added, typing Risk offers **Link** straight away, with no reload. (You can press **Remove** on Risk afterwards; the field stays in Trello.) | |
+| R2 | Line 16 again: two Chrome windows side by side, the matrix open in both. In the second, drag a placed card to the opposite corner. Do not touch the first window. | The first window shows the card in its new place within about 3 seconds, with no zoom or reload. | |
+| R3 | Line 17 again, with Person B: B drags a card from the bottom left to the top right while you watch. | You see the move within about 3 seconds. | |
+
 Words used here:
 
 - **Parameter**: a dropdown field with two or three levels, such as Value.
@@ -78,10 +92,6 @@ the first.
 - **The observer** is a third person, signed in to Trello, who can only view
   the test board (they cannot edit it).
 
-Do not press **Reorder in Trello** or **Undo last reorder** on two computers at
-the same time. The last one wins, and an undo may then put back only some of
-the cards.
-
 | No. | What to do | What you must see | Result |
 |-----|------------|-------------------|--------|
 | 17 | You press **Whole matrix**, pick a placed card near the bottom left, and tell Person B its title. Person B opens the board, presses **Matrix** and **Connect to Trello**, ticks the same lists as you, and sets **Across** to Cost and **Up** to Value. B drags that card to the top right corner. You watch your matrix and do not reload. | B sees the same cards as you. You see the card leave the bottom left and appear in the top right within about 5 seconds. | The update takes about 1 minute, not 5 seconds. |
@@ -113,7 +123,8 @@ again, because each browser connects for itself.
 ## After it passes
 
 The Power-Up is switched on for the real board (`67-Pass-Play-Teamwork`) only
-after all four rounds pass and the three steps below are done. Mike does that
+after all four rounds and the re-run lines R1 to R3 pass (retired lines
+excepted) and the three steps below are done. Mike does that
 himself. Nobody else switches it on.
 
 Do these steps in this order. They come before anything is switched on for the

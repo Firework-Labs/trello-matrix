@@ -33,7 +33,7 @@ prioritising a backlog. Static site, no server, all data in Trello.
 
 ## Where things are
 
-- `src/model/` pure rules (placement, drop, resequence, pacer, colour).
+- `src/model/` pure rules (placement, drop, pacer, colour).
 - `src/store/board-store.ts` the seam and its contract; `fake-store.ts` and
   `sample-data.ts` back the dev page and every test.
 - `src/view/` the matrix (`app.ts` mounts it on any `BoardStore`).
@@ -64,7 +64,7 @@ prioritising a backlog. Static site, no server, all data in Trello.
 - The real store must meet the contract in `board-store.ts`: reads include its
   own completed writes, and no snapshot older than its latest write is
   delivered.
-- Dialogs and the drawer make the rest of the page `inert` through
+- Dialogs make the rest of the page `inert` through
   `src/view/modal.ts`. Use it for any new modal.
 
 - Trello refuses to rename or delete custom fields and their options for
@@ -77,6 +77,13 @@ prioritising a backlog. Static site, no server, all data in Trello.
 - Every read and storage call in the Trello store has a 20-second limit, and a
   read is delivered only if no own write finished since it began and none is
   under way. Keep both when changing `src/trello/trello-store.ts`.
+- Trello's render notice is not reliable for changes made in another window or
+  by another person, so the Trello store also re-reads the board every 3 seconds
+  (`POLL_MS`) while subscribed and the page is visible. That read goes through
+  the Power-Up library, not REST. The view must stay cheap when a read repeats
+  what is shown (`snapshot-share.ts`).
+- Resequencing lists was removed on 2026-11-17 (design Amendment 3). Cards on
+  the test board may still hold its old `prev`/`gen` data; it is ignored.
 - A sign-in that lapses shows the reconnect bar (`src/view/reconnect-bar.ts`);
   `app.ts` wraps every store call to catch `auth` errors in one place.
 - The checks page (`proof.html`) is built only when `VITE_PROOF=1`, and writes

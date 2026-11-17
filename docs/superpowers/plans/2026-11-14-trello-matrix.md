@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript 5, Vite 6 (multi-page), Vitest 3, Playwright (Chromium and WebKit), no view library, Trello Power-Up client library from `https://p.trellocdn.com/power-up.min.js`, GitHub Pages.
 
-**Status (2026-11-16 16:37):** Tasks 1 to 14 complete, each reviewed, with two whole-range reviews and their fix waves; published from `main`. Task 2 grew three follow-ups (2b OAuth 2.0, 2c check page order, 2d checks P5 and P7), and Tasks 13 and 14 were revised after the live checks (see Amendment 2). Task 15 is in progress: the acceptance checklist (`docs/acceptance.md`) is with Mike, together with the Safari round of the live checks. Deviations from this plan are listed in the two amendments below and in the latest file in `handoff/`.
+**Status (2026-11-17):** Tasks 1 to 14 complete and published. Task 15: Mike ran the acceptance checklist in Chrome and Safari; its fixes are in (design Amendment 3: Resequence removed, a 3-second steady read, the Parameters window follows the board), and lines R1 to R3 of `docs/acceptance.md` are left to re-run. Plan text about resequencing no longer applies. Deviations are listed in the three amendments of the design and in the latest file in `handoff/`.
 
 **Spec:** `docs/superpowers/specs/2026-11-13-trello-matrix-design.md` (read it first; section numbers below refer to it). Reference mockup: `docs/superpowers/specs/assets/matrix-mockup.html` (throwaway; copy its look and feel, not its code).
 
