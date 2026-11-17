@@ -414,6 +414,7 @@ async function mountBoard(root: HTMLElement, plainStore: BoardStore, opts: Matri
     if (signal.aborted || shared === state.snapshot) return;
     adopt(shared);
     renderNow();
+    dialog.boardChanged(state.snapshot);
   }
 
   function openResequence(): void {

@@ -24,6 +24,11 @@ export interface ParameterDialog {
   el: HTMLElement;
   open(snapshot: BoardSnapshot): void;
   close(): void;
+  /**
+   * The store says the board changed (a field made in Trello, another person's change). An open dialog shows it, unless a
+   * change of its own is under way or waits for Reload: that change's own read follows.
+   */
+  boardChanged(snapshot: BoardSnapshot): void;
 }
 
 type BestEnd = 'first' | 'last';
@@ -292,11 +297,28 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     if (signal.aborted) return true;               // the matrix has gone away: nothing is left to draw on
     unread = false;
     showError('');
+    show(next);
+    deps.onChanged(snapshot!);
+    return true;
+  }
+
+  /** Shows the board as read, with the parameters this dialog made that the read left out kept on. */
+  function show(next: BoardSnapshot): void {
     for (const id of [...kept.keys()]) if (next.parameters.some(p => p.id === id)) kept.delete(id);
     snapshot = kept.size === 0 ? next : { ...next, parameters: [...next.parameters, ...structuredClone([...kept.values()])] };
-    deps.onChanged(snapshot);
     render();
-    return true;
+  }
+
+  /**
+   * After a change the store refused: it may have done part of it (Trello made the field, then adding it to the matrix
+   * failed), so the board is read again and shown, and the refusal's message stays. A failed read changes nothing.
+   */
+  async function rereadQuietly(): Promise<void> {
+    let next: BoardSnapshot;
+    try { next = await store.load(); } catch { return; }
+    if (signal.aborted || unread) return;
+    show(next);
+    deps.onChanged(snapshot!);
   }
 
   /** What became of a change: 'failed' (the store refused it, so nothing changed), 'unread' (made, but the board could not be read again) or 'done'. */
@@ -312,7 +334,9 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
         try {
           await change();
         } catch (error) {
-          if (!signal.aborted) showError(messageOf(error));
+          if (signal.aborted) return 'failed';
+          showError(messageOf(error));
+          await rereadQuietly();
           return 'failed';
         }
         return (await reread()) ? 'done' : 'unread';
@@ -498,6 +522,11 @@ export function createParameterDialog(deps: ParameterDialogDeps): ParameterDialo
     deps.onClosed();
   }
 
+  function boardChanged(next: BoardSnapshot): void {
+    if (backdrop.hidden || busy > 0 || unread || signal.aborted) return;
+    show(next);
+  }
+
   render();
-  return { el: backdrop, open, close };
+  return { el: backdrop, open, close, boardChanged };
 }

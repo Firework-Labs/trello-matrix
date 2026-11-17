@@ -210,6 +210,36 @@ test('a store error is shown in the dialog and the dialog stays open', async ({ 
   await expect(d.getByTestId('param-error')).toBeHidden();
 });
 
+test('a create that made the field and then failed reads the board again, so the field can be linked without a reload', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  // As on Trello: the field is made, then adding it to the matrix fails. Nothing tells the subscribers.
+  await store(page, s => {
+    const create = s.createParameter.bind(s);
+    s.createParameter = async input => {
+      const made = await create(input);
+      await s.removeParameter(made.id);                  // takes it off the matrix only; the field stays
+      throw Object.assign(new Error('The field was created in Trello but could not be added to the matrix. Link it from the dialog.'), { kind: 'network' });
+    };
+  });
+  const d = dialog(page);
+  await d.getByLabel('Name').fill('Risk'); await d.getByRole('button', { name: 'Add parameter' }).click();
+  await expect(d.getByTestId('param-error')).toHaveText('The field was created in Trello but could not be added to the matrix. Link it from the dialog.');
+  await expect(d.getByTestId('param-note')).toHaveText('A field called "Risk" already exists. Link to it?');
+  await d.getByRole('button', { name: 'Link' }).click();
+  await expect(row(page, 'f-risk')).toHaveCount(1);
+  await expect(page.getByTestId('across').locator('option', { hasText: 'Risk' })).toHaveCount(1);
+});
+
+test('a field made in Trello while the dialog is open can be linked without a reload', async ({ page }) => {
+  await page.goto('dev.html'); await page.getByTestId('params').click();
+  const d = dialog(page);
+  await d.getByLabel('Name').fill('Risk');
+  await expect(d.getByRole('button', { name: 'Add parameter' })).toBeEnabled();
+  await store(page, s => s.remote(b => { b.dropdownFields.push({ id: 'f-risk', name: 'Risk', options: ['Low', 'High'].map((text, i) => ({ id: `r${i}`, text, colour: 'none' })) }); }));
+  await expect(d.getByTestId('param-note')).toHaveText('A field called "Risk" already exists. Link to it?');
+  await expect(d.getByLabel('Name')).toHaveValue('Risk');                                // what was typed is kept
+});
+
 test('a failed rename shows the error and puts the old name back', async ({ page }) => {
   await page.goto('dev.html'); await page.getByTestId('params').click();
   await store(page, s => s.failNext('renameParameter', Object.assign(new Error('Trello said no.'), { kind: 'network' }) as never));
